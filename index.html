@@ -183,8 +183,8 @@
       <textarea id="text" dir="auto" placeholder="Paste text here, or load a file below."></textarea>
       <div class="row" style="margin-top: 10px;">
         <label class="btn secondary">
-          <input type="file" id="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp" hidden>
-          Load file
+          <input type="file" id="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp" multiple hidden>
+          Load files
         </label>
         <button class="btn secondary" id="cleanup" type="button" title="Remove copyright/header/footer boilerplate">Clean up ✨</button>
         <button class="btn secondary" id="summarize" type="button" title="Generate a summary">Summarize ✨</button>
@@ -200,7 +200,7 @@
             <option value="eng+heb">English + Hebrew</option>
           </select>
         </label>
-        <span class="small" style="opacity:0.7;">PDF, DOCX, TXT, or image.</span>
+        <span class="small" style="opacity:0.7;">PDF, DOCX, TXT, or image. Multiple files supported.</span>
       </div>
       <div id="pbarWrap" hidden style="margin-top: 10px;">
         <div class="pbar"><div class="pbar-fill" id="pbarFill"></div></div>
@@ -321,17 +321,27 @@
     });
 
     fileEl.addEventListener('change', async e => {
-      const f = e.target.files[0];
-      if (!f) return;
+      const files = Array.from(e.target.files);
+      if (!files.length) return;
       try {
-        setStatus(`Reading ${f.name}…`);
-        const raw = await readFile(f);
-        const isAuto = !f.name.toLowerCase().endsWith('.txt');
-        const final = isAuto ? cleanupText(raw) : raw;
+        const parts = [];
+        let totalRaw = 0;
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+          const label = files.length > 1 ? `${i + 1}/${files.length}: ${f.name}` : f.name;
+          setStatus(`Reading ${label}…`);
+          const raw = await readFile(f);
+          parts.push(raw.trim());
+          totalRaw += raw.length;
+        }
+        const combined = parts.filter(Boolean).join('\n\n');
+        const isAuto = files.some(f => !f.name.toLowerCase().endsWith('.txt'));
+        const final = isAuto ? cleanupText(combined) : combined;
         textEl.value = final.trim();
-        const removed = raw.length - final.length;
+        const removed = totalRaw - final.length;
         const note = isAuto && removed > 0 ? ` · cleaned ${removed.toLocaleString()} chars` : '';
-        setStatus(`Loaded ${f.name} (${final.length.toLocaleString()} chars${note})`);
+        const what = files.length > 1 ? `${files.length} files` : files[0].name;
+        setStatus(`Loaded ${what} (${final.length.toLocaleString()} chars${note})`);
       } catch (err) {
         console.error(err);
         setStatus(`Error: ${err.message || err}`);
