@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0f1115">
+  <title>Read Aloud</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      --bg: #0f1115;
+      --panel: #1a1d24;
+      --border: #2a2e38;
+      --text: #e8e8ec;
+      --muted: #9098a8;
+      --accent: #4f8cff;
+      --accent-hover: #3d75e0;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f5f5f7;
+        --panel: #ffffff;
+        --border: #d1d1d6;
+        --text: #1a1a1c;
+        --muted: #6b6b75;
+      }
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    body { min-height: 100vh; display: flex; justify-content: center; }
+    main {
+      width: 100%;
+      max-width: 720px;
+      padding: 16px;
+      padding-bottom: 60px;
+    }
+    h1 {
+      font-size: 24px;
+      margin: 8px 0 16px;
+      letter-spacing: -0.5px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 200px;
+      max-height: 50vh;
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 16px;
+      font-family: inherit;
+      resize: vertical;
+    }
+    textarea:focus { outline: none; border-color: var(--accent); }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .row + .row { margin-top: 12px; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      min-height: 44px;
+      font-family: inherit;
+    }
+    .btn:hover { background: var(--accent-hover); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn.secondary:hover { background: var(--border); }
+    label.btn { cursor: pointer; }
+    label.btn input { display: none; }
+    select, input[type="range"] {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 15px;
+      font-family: inherit;
+      min-height: 40px;
+    }
+    select { flex: 1; min-width: 200px; }
+    .speed { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 220px; }
+    .speed input[type="range"] { flex: 1; padding: 0; min-height: 30px; }
+    .player { display: flex; gap: 8px; flex-wrap: wrap; }
+    .player .btn { flex: 1; min-width: 90px; }
+    .status { font-size: 13px; color: var(--muted); flex: 1; min-width: 100%; }
+    .progress {
+      font-size: 14px;
+      color: var(--muted);
+      max-height: 240px;
+      overflow-y: auto;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      line-height: 1.7;
+    }
+    .progress .current {
+      background: var(--accent);
+      color: white;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    .small { font-size: 13px; color: var(--muted); }
+    @media (max-width: 500px) {
+      main { padding: 10px; }
+      h1 { font-size: 20px; }
+      .player .btn { font-size: 14px; padding: 10px 8px; min-width: 70px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Read Aloud</h1>
+
+    <section class="panel">
+      <textarea id="text" placeholder="Paste text here, or load a file below."></textarea>
+      <div class="row" style="margin-top: 10px;">
+        <label class="btn secondary">
+          <input type="file" id="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp" hidden>
+          Load file
+        </label>
+        <button class="btn secondary" id="clear" type="button">Clear</button>
+        <span id="status" class="status"></span>
+      </div>
+      <div class="small" style="margin-top: 6px;">PDF, DOCX, TXT, or image (OCR).</div>
+    </section>
+
+    <section class="panel">
+      <div class="row">
+        <select id="voice" aria-label="Voice"></select>
+      </div>
+      <div class="row">
+        <div class="speed">
+          <span class="small">Speed</span>
+          <input type="range" id="speed" min="0.5" max="2" step="0.1" value="1" aria-label="Speed">
+          <span id="speedValue" class="small">1.0×</span>
+        </div>
+      </div>
+      <div class="row player">
+        <button class="btn" id="play" type="button">▶ Play</button>
+        <button class="btn secondary" id="pause" type="button">⏸ Pause</button>
+        <button class="btn secondary" id="stop" type="button">⏹ Stop</button>
+      </div>
+    </section>
+
+    <section class="panel" id="progressPanel" hidden>
+      <div class="small" style="margin-bottom: 6px;">Progress</div>
+      <div class="progress" id="progress"></div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js"></script>
+
+  <script>
+    if (window.pdfjsLib) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+    }
+
+    const $ = id => document.getElementById(id);
+    const textEl = $('text');
+    const fileEl = $('file');
+    const clearEl = $('clear');
+    const statusEl = $('status');
+    const voiceEl = $('voice');
+    const speedEl = $('speed');
+    const speedValueEl = $('speedValue');
+    const playEl = $('play');
+    const pauseEl = $('pause');
+    const stopEl = $('stop');
+    const progressPanelEl = $('progressPanel');
+    const progressEl = $('progress');
+
+    let voices = [];
+
+    function isNeural(v) {
+      const n = v.name.toLowerCase();
+      return n.includes('online') || n.includes('natural') || n.includes('neural') || n.includes('siri') || n.includes('enhanced');
+    }
+    function score(v) {
+      let s = 0;
+      if (isNeural(v)) s += 100;
+      if (v.lang.startsWith('en')) s += 10;
+      return s;
+    }
+    function loadVoices() {
+      voices = speechSynthesis.getVoices();
+      if (!voices.length) return;
+      const eng = voices.filter(v => v.lang.startsWith('en'));
+      const other = voices.filter(v => !v.lang.startsWith('en'));
+      const ranked = [...eng, ...other].sort((a, b) => score(b) - score(a));
+
+      const prev = voiceEl.value;
+      voiceEl.innerHTML = '';
+      for (const v of ranked) {
+        const opt = document.createElement('option');
+        opt.value = v.voiceURI;
+        opt.textContent = `${v.name} — ${v.lang}${isNeural(v) ? ' ✨' : ''}`;
+        voiceEl.appendChild(opt);
+      }
+      if (prev && ranked.find(v => v.voiceURI === prev)) {
+        voiceEl.value = prev;
+      } else {
+        const best = ranked.find(v => v.lang.startsWith('en')) || ranked[0];
+        if (best) voiceEl.value = best.voiceURI;
+      }
+    }
+    speechSynthesis.onvoiceschanged = loadVoices;
+    loadVoices();
+
+    speedEl.addEventListener('input', () => {
+      speedValueEl.textContent = parseFloat(speedEl.value).toFixed(1) + '×';
+    });
+
+    fileEl.addEventListener('change', async e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      try {
+        setStatus(`Reading ${f.name}…`);
+        const text = await readFile(f);
+        textEl.value = text.trim();
+        setStatus(`Loaded ${f.name} (${text.length.toLocaleString()} chars)`);
+      } catch (err) {
+        console.error(err);
+        setStatus(`Error: ${err.message || err}`);
+      } finally {
+        fileEl.value = '';
+      }
+    });
+
+    async function readFile(f) {
+      const name = f.name.toLowerCase();
+      if (name.endsWith('.txt')) return await f.text();
+      if (name.endsWith('.docx')) return await readDocx(f);
+      if (name.endsWith('.pdf')) return await readPdf(f);
+      if (f.type.startsWith('image/')) return await readImage(f);
+      throw new Error(`Unsupported file: ${f.name}`);
+    }
+
+    async function readDocx(f) {
+      const buf = await f.arrayBuffer();
+      const result = await mammoth.extractRawText({ arrayBuffer: buf });
+      return result.value;
+    }
+
+    async function readPdf(f) {
+      const buf = await f.arrayBuffer();
+      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+      const parts = [];
+      for (let i = 1; i <= doc.numPages; i++) {
+        setStatus(`Reading PDF page ${i}/${doc.numPages}…`);
+        const page = await doc.getPage(i);
+        const tc = await page.getTextContent();
+        const pageText = tc.items.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
+        if (pageText.length > 20) {
+          parts.push(pageText);
+        } else {
+          parts.push(await ocrPdfPage(page, i, doc.numPages));
+        }
+      }
+      return parts.join('\n\n');
+    }
+
+    async function ocrPdfPage(page, i, total) {
+      setStatus(`OCR page ${i}/${total} (slow)…`);
+      const viewport = page.getViewport({ scale: 2.0 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+      return text;
+    }
+
+    async function readImage(f) {
+      setStatus('OCR image (first run downloads ~10 MB)…');
+      const { data: { text } } = await Tesseract.recognize(f, 'eng');
+      return text;
+    }
+
+    clearEl.addEventListener('click', () => {
+      stop();
+      textEl.value = '';
+      progressPanelEl.hidden = true;
+      progressEl.innerHTML = '';
+      setStatus('');
+    });
+
+    function setStatus(msg) { statusEl.textContent = msg; }
+
+    let chunks = [];
+    let currentIdx = 0;
+    let isPlaying = false;
+    let isPaused = false;
+
+    function chunkText(text) {
+      const sentences = text
+        .replace(/\s+/g, ' ')
+        .split(/(?<=[.!?…])\s+/g)
+        .map(s => s.trim())
+        .filter(Boolean);
+      const out = [];
+      for (const s of sentences) {
+        if (s.length <= 250) {
+          out.push(s);
+        } else {
+          const parts = s.split(/(?<=[,;:])\s+/);
+          let buf = '';
+          for (const p of parts) {
+            if ((buf + ' ' + p).trim().length > 250) {
+              if (buf) out.push(buf.trim());
+              buf = p;
+            } else {
+              buf = (buf + ' ' + p).trim();
+            }
+          }
+          if (buf) out.push(buf.trim());
+        }
+      }
+      return out;
+    }
+
+    function play() {
+      if (isPaused) {
+        speechSynthesis.resume();
+        isPaused = false;
+        return;
+      }
+      const text = textEl.value.trim();
+      if (!text) {
+        setStatus('Nothing to read.');
+        return;
+      }
+      stop();
+      chunks = chunkText(text);
+      if (!chunks.length) return;
+      currentIdx = 0;
+      isPlaying = true;
+      progressPanelEl.hidden = false;
+      renderProgress();
+      speakNext();
+    }
+
+    function speakNext() {
+      if (!isPlaying) return;
+      if (currentIdx >= chunks.length) {
+        isPlaying = false;
+        setStatus('Done.');
+        return;
+      }
+      const u = new SpeechSynthesisUtterance(chunks[currentIdx]);
+      const v = voices.find(x => x.voiceURI === voiceEl.value);
+      if (v) { u.voice = v; u.lang = v.lang; }
+      u.rate = parseFloat(speedEl.value);
+      u.onend = () => {
+        if (!isPlaying) return;
+        currentIdx++;
+        renderProgress();
+        speakNext();
+      };
+      u.onerror = (e) => {
+        console.error('TTS error', e);
+        if (!isPlaying) return;
+        currentIdx++;
+        speakNext();
+      };
+      speechSynthesis.speak(u);
+    }
+
+    function pause() {
+      if (isPlaying && !isPaused) {
+        speechSynthesis.pause();
+        isPaused = true;
+      }
+    }
+
+    function stop() {
+      isPlaying = false;
+      isPaused = false;
+      speechSynthesis.cancel();
+      currentIdx = 0;
+    }
+
+    playEl.addEventListener('click', play);
+    pauseEl.addEventListener('click', pause);
+    stopEl.addEventListener('click', stop);
+
+    speedEl.addEventListener('change', () => {
+      if (isPlaying && !isPaused) {
+        speechSynthesis.cancel();
+        setTimeout(speakNext, 50);
+      }
+    });
+
+    voiceEl.addEventListener('change', () => {
+      if (isPlaying && !isPaused) {
+        speechSynthesis.cancel();
+        setTimeout(speakNext, 50);
+      }
+    });
+
+    function renderProgress() {
+      if (chunks.length > 500) {
+        progressEl.textContent = `Sentence ${currentIdx + 1} of ${chunks.length}`;
+        return;
+      }
+      progressEl.innerHTML = chunks.map((c, i) =>
+        i === currentIdx ? `<span class="current">${escapeHtml(c)}</span>` : escapeHtml(c)
+      ).join(' ');
+      const cur = progressEl.querySelector('.current');
+      if (cur) cur.scrollIntoView({ block: 'nearest' });
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    window.addEventListener('beforeunload', () => speechSynthesis.cancel());
+  </script>
+</body>
+</html>
