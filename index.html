@@ -147,10 +147,19 @@
           Load file
         </label>
         <button class="btn secondary" id="cleanup" type="button" title="Remove copyright/header/footer boilerplate">Clean up ✨</button>
+        <button class="btn secondary" id="summarize" type="button" title="Generate a summary">Summarize ✨</button>
         <button class="btn secondary" id="clear" type="button">Clear</button>
         <span id="status" class="status"></span>
       </div>
       <div class="small" style="margin-top: 6px;">PDF, DOCX, TXT, or image (OCR).</div>
+    </section>
+
+    <section class="panel" id="summaryPanel" hidden>
+      <div class="row" style="margin-bottom: 8px;">
+        <span class="small" style="flex:1;">Summary <span id="summaryMode" class="small" style="opacity:0.7;"></span></span>
+        <button class="btn secondary" id="playSummary" type="button" style="min-height:34px; padding: 6px 12px; font-size:13px;">▶ Read summary</button>
+      </div>
+      <textarea id="summary" placeholder="Generated summary will appear here." style="min-height: 140px;"></textarea>
     </section>
 
     <section class="panel">
@@ -272,6 +281,96 @@
         : 'Nothing to clean.');
     });
 
+    const summaryEl = $('summary');
+    const summaryPanelEl = $('summaryPanel');
+    const summaryModeEl = $('summaryMode');
+
+    $('summarize').addEventListener('click', async () => {
+      const text = textEl.value.trim();
+      if (!text) { setStatus('Nothing to summarize.'); return; }
+      try {
+        const { summary, mode } = await summarize(text);
+        summaryEl.value = summary;
+        summaryModeEl.textContent = `· ${mode}`;
+        summaryPanelEl.hidden = false;
+        setStatus(`Summary ready (${summary.length.toLocaleString()} chars)`);
+      } catch (err) {
+        console.error(err);
+        setStatus(`Summarize failed: ${err.message || err}`);
+      }
+    });
+
+    $('playSummary').addEventListener('click', () => play(summaryEl.value));
+
+    async function summarize(text) {
+      const Sum = window.Summarizer || (window.ai && window.ai.summarizer);
+      if (Sum) {
+        try {
+          const avail = await (Sum.availability ? Sum.availability() : Sum.capabilities && Sum.capabilities());
+          const ok = avail === 'available' || avail === 'downloadable' || avail === 'downloading' || (avail && avail.available && avail.available !== 'no');
+          if (ok) {
+            setStatus('Summarizing with on-device AI…');
+            const summarizer = await Sum.create({
+              type: 'key-points',
+              format: 'plain-text',
+              length: 'medium',
+              monitor(m) {
+                m.addEventListener?.('downloadprogress', e => {
+                  const pct = Math.round((e.loaded || 0) * 100);
+                  setStatus(`Downloading AI model: ${pct}%`);
+                });
+              }
+            });
+            const input = text.length > 16000 ? text.slice(0, 16000) : text;
+            const summary = await summarizer.summarize(input);
+            summarizer.destroy?.();
+            return { summary, mode: 'AI · on-device' };
+          }
+        } catch (err) {
+          console.warn('Summarizer API failed, falling back to extractive', err);
+        }
+      }
+      setStatus('Summarizing (extractive)…');
+      return { summary: extractiveSummary(text), mode: 'extractive' };
+    }
+
+    function extractiveSummary(text, ratio = 0.2) {
+      const sentences = text
+        .replace(/\s+/g, ' ')
+        .split(/(?<=[.!?…])\s+/)
+        .map(s => s.trim())
+        .filter(s => s.length > 15);
+      if (sentences.length <= 3) return sentences.join(' ');
+
+      const stop = new Set(('a an the is are was were be been being have has had do does did will would could should can may might must of to in on at for with from by as it its this that these those i you he she we they me him her us them and or but if not so also do not don\'t doesn\'t isn\'t aren\'t there their they\'re what when where who why how which while because however thus therefore than then them very some any all most more less much many few each every other another such here').split(' '));
+
+      const freq = new Map();
+      for (const s of sentences) {
+        const words = s.toLowerCase().match(/\b[a-z'][\w']*\b/g) || [];
+        for (const w of words) {
+          if (stop.has(w) || w.length < 3) continue;
+          freq.set(w, (freq.get(w) || 0) + 1);
+        }
+      }
+      if (!freq.size) return sentences.slice(0, 5).join(' ');
+      const maxFreq = Math.max(...freq.values());
+      for (const [k, v] of freq) freq.set(k, v / maxFreq);
+
+      const scored = sentences.map((s, i) => {
+        const words = s.toLowerCase().match(/\b[a-z'][\w']*\b/g) || [];
+        let score = 0;
+        for (const w of words) score += freq.get(w) || 0;
+        score = score / Math.max(1, Math.sqrt(words.length));
+        if (i < sentences.length * 0.25) score *= 1.15;
+        return { score, idx: i };
+      });
+
+      const target = Math.max(3, Math.min(15, Math.round(sentences.length * ratio)));
+      scored.sort((a, b) => b.score - a.score);
+      const keep = new Set(scored.slice(0, target).map(s => s.idx));
+      return sentences.filter((_, i) => keep.has(i)).join(' ');
+    }
+
     async function readFile(f) {
       const name = f.name.toLowerCase();
       if (name.endsWith('.txt')) return await f.text();
@@ -389,6 +488,10 @@
       textEl.value = '';
       progressPanelEl.hidden = true;
       progressEl.innerHTML = '';
+      const sp = document.getElementById('summaryPanel');
+      const su = document.getElementById('summary');
+      if (sp) sp.hidden = true;
+      if (su) su.value = '';
       setStatus('');
     });
 
@@ -426,13 +529,14 @@
       return out;
     }
 
-    function play() {
-      if (isPaused) {
+    function play(sourceText) {
+      const explicit = typeof sourceText === 'string';
+      if (!explicit && isPaused) {
         speechSynthesis.resume();
         isPaused = false;
         return;
       }
-      const text = textEl.value.trim();
+      const text = (explicit ? sourceText : textEl.value).trim();
       if (!text) {
         setStatus('Nothing to read.');
         return;
