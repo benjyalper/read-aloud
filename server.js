@@ -6,7 +6,39 @@ import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const MAX_TEXT_LEN = 10000;
+const MAX_TEXT_LEN = 100000;
+const CHUNK_SIZE = 3000;
+
+function chunkBySentence(text, maxLen) {
+  const sentences = text.replace(/\s+/g, ' ').split(/(?<=[.!?…])\s+/g).map(s => s.trim()).filter(Boolean);
+  const out = [];
+  let buf = '';
+  for (const s of sentences) {
+    if (s.length > maxLen) {
+      if (buf) { out.push(buf); buf = ''; }
+      const parts = s.split(/(?<=[,;:])\s+/);
+      let inner = '';
+      for (const p of parts) {
+        if ((inner + ' ' + p).trim().length > maxLen) {
+          if (inner) out.push(inner.trim());
+          inner = p;
+        } else {
+          inner = (inner + ' ' + p).trim();
+        }
+      }
+      if (inner) out.push(inner.trim());
+      continue;
+    }
+    if ((buf + ' ' + s).trim().length > maxLen) {
+      if (buf) out.push(buf.trim());
+      buf = s;
+    } else {
+      buf = (buf + ' ' + s).trim();
+    }
+  }
+  if (buf) out.push(buf.trim());
+  return out;
+}
 
 app.use(express.json({ limit: '5mb' }));
 app.use(express.static('.', { dotfiles: 'deny', extensions: ['html'] }));
@@ -47,32 +79,42 @@ app.post('/api/tts', async (req, res) => {
   const ratePct = Math.max(-50, Math.min(100, Number(rate) || 0));
   const rateStr = `${ratePct >= 0 ? '+' : ''}${ratePct}%`;
 
-  const tts = new MsEdgeTTS();
   let closed = false;
+  let activeTts = null;
   req.on('close', () => {
     closed = true;
-    try { tts.close(); } catch {}
+    try { activeTts?.close(); } catch {}
   });
 
+  res.setHeader('Content-Type', 'audio/mpeg');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Disposition', `inline; filename="read-aloud.mp3"`);
+
+  const chunks = chunkBySentence(trimmed, CHUNK_SIZE);
   try {
-    await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-    const { audioStream } = tts.toStream(trimmed, { rate: rateStr });
-
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Disposition', `inline; filename="read-aloud.mp3"`);
-
-    audioStream.on('error', err => {
-      console.error('tts stream error', err);
-      if (!res.headersSent) res.status(500).json({ error: String(err.message || err) });
-      try { tts.close(); } catch {}
-    });
-    audioStream.once('close', () => { try { tts.close(); } catch {} });
-    audioStream.pipe(res);
+    for (const chunk of chunks) {
+      if (closed) break;
+      activeTts = new MsEdgeTTS();
+      try {
+        await activeTts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+        const { audioStream } = activeTts.toStream(chunk, { rate: rateStr });
+        await new Promise((resolve, reject) => {
+          audioStream.on('data', d => { if (!closed) res.write(d); });
+          audioStream.on('end', resolve);
+          audioStream.on('error', reject);
+          audioStream.on('close', resolve);
+        });
+      } finally {
+        try { activeTts.close(); } catch {}
+        activeTts = null;
+      }
+    }
+    if (!closed) res.end();
   } catch (err) {
-    console.error('tts setup error', err);
+    console.error('tts error', err);
     if (!res.headersSent) res.status(500).json({ error: String(err.message || err) });
-    try { tts.close(); } catch {}
+    else res.end();
+    try { activeTts?.close(); } catch {}
   }
 });
 
