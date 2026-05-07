@@ -784,17 +784,33 @@
       localStorage.setItem('hqVoice', hqVoiceEl.value);
     });
 
+    let hqAbort = null;
+    const HQ_LABEL_IDLE = 'Generate MP3 ✨';
+    const HQ_LABEL_BUSY = '⏹ Stop & save';
+
     hqGenerateEl.addEventListener('click', async () => {
+      if (hqAbort) {
+        hqAbort.abort();
+        return;
+      }
       const text = textEl.value.trim();
       if (!text) { setStatus('Nothing to generate.'); return; }
       const ratePct = Math.round((parseFloat(speedEl.value) - 1) * 100);
-      hqGenerateEl.disabled = true;
-      showProgressIndeterminate(`Generating MP3 with ${hqVoiceEl.options[hqVoiceEl.selectedIndex]?.text || 'neural voice'}…`);
+      const estimated = Math.max(8000, text.length * 500);
+
+      hqAbort = new AbortController();
+      hqGenerateEl.textContent = HQ_LABEL_BUSY;
+      const chunks = [];
+      let received = 0;
+      let aborted = false;
+
+      showProgress('Connecting…', 0);
       try {
         const r = await fetch('/api/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, voice: hqVoiceEl.value, rate: ratePct })
+          body: JSON.stringify({ text, voice: hqVoiceEl.value, rate: ratePct }),
+          signal: hqAbort.signal,
         });
         if (!r.ok) {
           const errText = await r.text();
@@ -802,22 +818,48 @@
           try { msg = JSON.parse(errText).error || errText; } catch {}
           throw new Error(msg);
         }
-        const blob = await r.blob();
-        if (hqLastUrl) URL.revokeObjectURL(hqLastUrl);
-        hqLastUrl = URL.createObjectURL(blob);
-        hqAudioEl.src = hqLastUrl;
-        hqAudioEl.hidden = false;
-        hqDownloadEl.href = hqLastUrl;
-        hqDownloadEl.hidden = false;
-        setStatus(`MP3 ready (${(blob.size / 1024).toFixed(0)} KB)`);
-        hqAudioEl.play().catch(() => {});
+        const reader = r.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.length;
+          const pct = Math.min(99, Math.round((received / estimated) * 100));
+          showProgress(`Generating MP3 · ${pct}% · ${(received / 1024).toFixed(0)} KB`, pct);
+        }
       } catch (err) {
-        console.error(err);
-        setStatus(`MP3 generation failed: ${err.message || err}`);
-      } finally {
-        hideProgress();
-        hqGenerateEl.disabled = false;
+        if (err.name === 'AbortError') {
+          aborted = true;
+        } else {
+          console.error(err);
+          setStatus(`MP3 generation failed: ${err.message || err}`);
+          hqGenerateEl.textContent = HQ_LABEL_IDLE;
+          hqAbort = null;
+          hideProgress();
+          return;
+        }
       }
+
+      hqAbort = null;
+      hqGenerateEl.textContent = HQ_LABEL_IDLE;
+      hideProgress();
+
+      if (chunks.length === 0) {
+        setStatus('Cancelled. No audio.');
+        return;
+      }
+      const blob = new Blob(chunks, { type: 'audio/mpeg' });
+      if (hqLastUrl) URL.revokeObjectURL(hqLastUrl);
+      hqLastUrl = URL.createObjectURL(blob);
+      hqAudioEl.src = hqLastUrl;
+      hqAudioEl.hidden = false;
+      hqDownloadEl.href = hqLastUrl;
+      hqDownloadEl.hidden = false;
+      const sizeKb = (blob.size / 1024).toFixed(0);
+      setStatus(aborted
+        ? `Stopped. Partial MP3 ready (${sizeKb} KB)`
+        : `MP3 ready (${sizeKb} KB)`);
+      hqAudioEl.play().catch(() => {});
     });
   </script>
 </body>
