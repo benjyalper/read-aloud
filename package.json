@@ -1,14 +1,16 @@
 {
   "name": "read-aloud",
-  "version": "1.0.0",
-  "description": "Personal-use TTS web app — reads pasted text, PDFs, DOCX, and images entirely in the browser.",
+  "version": "1.1.0",
+  "description": "Personal-use TTS web app — reads pasted text, PDFs, DOCX, and images entirely in the browser, with optional high-quality MP3 generation via Microsoft Edge TTS.",
   "private": true,
+  "type": "module",
   "scripts": {
-    "start": "serve -s . -l tcp://0.0.0.0:${PORT:-3000}",
-    "dev": "serve -s . -l 3000"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "dependencies": {
-    "serve": "^14.2.4"
+    "express": "^4.21.2",
+    "msedge-tts": "^2.0.5"
   },
   "engines": {
     "node": ">=18"

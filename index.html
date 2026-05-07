@@ -234,6 +234,21 @@
       </div>
     </section>
 
+    <section class="panel" id="hqPanel">
+      <div class="row" style="margin-bottom: 8px;">
+        <span class="small" style="flex:1;">High-quality audio (MP3, neural voice)</span>
+      </div>
+      <div class="row">
+        <select id="hqVoice" aria-label="HQ Voice"></select>
+      </div>
+      <div class="row">
+        <button class="btn" id="hqGenerate" type="button">Generate MP3 ✨</button>
+        <a id="hqDownload" class="btn secondary" download="read-aloud.mp3" hidden>↓ Download</a>
+      </div>
+      <audio id="hqAudio" controls hidden style="width:100%; margin-top:10px;"></audio>
+      <div class="small" style="margin-top:6px; opacity:0.7;">Uses the Microsoft Edge neural voices (same on every device). Up to 10,000 chars per request.</div>
+    </section>
+
     <section class="panel" id="progressPanel" hidden>
       <div class="small" style="margin-bottom: 6px;">Progress</div>
       <div class="progress" id="progress"></div>
@@ -727,6 +742,73 @@
     }
 
     window.addEventListener('beforeunload', () => speechSynthesis.cancel());
+
+    const hqVoiceEl = $('hqVoice');
+    const hqGenerateEl = $('hqGenerate');
+    const hqDownloadEl = $('hqDownload');
+    const hqAudioEl = $('hqAudio');
+    let hqLastUrl = null;
+
+    (async function loadHqVoices() {
+      try {
+        const r = await fetch('/api/voices');
+        if (!r.ok) throw new Error('voices endpoint failed');
+        const list = await r.json();
+        const saved = localStorage.getItem('hqVoice') || 'en-US-AndrewNeural';
+        hqVoiceEl.innerHTML = '';
+        for (const v of list) {
+          const opt = document.createElement('option');
+          opt.value = v.id;
+          opt.textContent = `${v.name}`;
+          hqVoiceEl.appendChild(opt);
+        }
+        if (list.find(v => v.id === saved)) hqVoiceEl.value = saved;
+      } catch (err) {
+        hqVoiceEl.innerHTML = '<option>Server unavailable</option>';
+        hqGenerateEl.disabled = true;
+        console.warn('HQ voices unavailable:', err);
+      }
+    })();
+
+    hqVoiceEl.addEventListener('change', () => {
+      localStorage.setItem('hqVoice', hqVoiceEl.value);
+    });
+
+    hqGenerateEl.addEventListener('click', async () => {
+      const text = textEl.value.trim();
+      if (!text) { setStatus('Nothing to generate.'); return; }
+      const ratePct = Math.round((parseFloat(speedEl.value) - 1) * 100);
+      hqGenerateEl.disabled = true;
+      showProgressIndeterminate(`Generating MP3 with ${hqVoiceEl.options[hqVoiceEl.selectedIndex]?.text || 'neural voice'}…`);
+      try {
+        const r = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, voice: hqVoiceEl.value, rate: ratePct })
+        });
+        if (!r.ok) {
+          const errText = await r.text();
+          let msg = errText;
+          try { msg = JSON.parse(errText).error || errText; } catch {}
+          throw new Error(msg);
+        }
+        const blob = await r.blob();
+        if (hqLastUrl) URL.revokeObjectURL(hqLastUrl);
+        hqLastUrl = URL.createObjectURL(blob);
+        hqAudioEl.src = hqLastUrl;
+        hqAudioEl.hidden = false;
+        hqDownloadEl.href = hqLastUrl;
+        hqDownloadEl.hidden = false;
+        setStatus(`MP3 ready (${(blob.size / 1024).toFixed(0)} KB)`);
+        hqAudioEl.play().catch(() => {});
+      } catch (err) {
+        console.error(err);
+        setStatus(`MP3 generation failed: ${err.message || err}`);
+      } finally {
+        hideProgress();
+        hqGenerateEl.disabled = false;
+      }
+    });
   </script>
 </body>
 </html>
