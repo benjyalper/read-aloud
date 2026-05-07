@@ -128,6 +128,35 @@
       border-radius: 4px;
     }
     .small { font-size: 13px; color: var(--muted); }
+    .pbar {
+      width: 100%;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+      position: relative;
+    }
+    .pbar-fill {
+      height: 100%;
+      background: var(--accent);
+      width: 0%;
+      transition: width 0.15s ease-out;
+      border-radius: 3px;
+    }
+    .pbar-fill.indeterminate {
+      width: 35% !important;
+      animation: pbar-slide 1.4s infinite ease-in-out;
+      transition: none;
+    }
+    @keyframes pbar-slide {
+      0%   { transform: translateX(-110%); }
+      100% { transform: translateX(310%); }
+    }
+    .pbar-label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 5px;
+    }
     @media (max-width: 500px) {
       main { padding: 10px; }
       h1 { font-size: 20px; }
@@ -152,6 +181,10 @@
         <span id="status" class="status"></span>
       </div>
       <div class="small" style="margin-top: 6px;">PDF, DOCX, TXT, or image (OCR).</div>
+      <div id="pbarWrap" hidden style="margin-top: 10px;">
+        <div class="pbar"><div class="pbar-fill" id="pbarFill"></div></div>
+        <div class="pbar-label" id="pbarLabel"></div>
+      </div>
     </section>
 
     <section class="panel" id="summaryPanel" hidden>
@@ -268,6 +301,7 @@
         setStatus(`Error: ${err.message || err}`);
       } finally {
         fileEl.value = '';
+        hideProgress();
       }
     });
 
@@ -297,6 +331,8 @@
       } catch (err) {
         console.error(err);
         setStatus(`Summarize failed: ${err.message || err}`);
+      } finally {
+        hideProgress();
       }
     });
 
@@ -309,7 +345,7 @@
           const avail = await (Sum.availability ? Sum.availability() : Sum.capabilities && Sum.capabilities());
           const ok = avail === 'available' || avail === 'downloadable' || avail === 'downloading' || (avail && avail.available && avail.available !== 'no');
           if (ok) {
-            setStatus('Summarizing with on-device AI…');
+            showProgressIndeterminate('Initializing on-device AI…');
             const summarizer = await Sum.create({
               type: 'key-points',
               format: 'plain-text',
@@ -317,11 +353,12 @@
               monitor(m) {
                 m.addEventListener?.('downloadprogress', e => {
                   const pct = Math.round((e.loaded || 0) * 100);
-                  setStatus(`Downloading AI model: ${pct}%`);
+                  showProgress(`Downloading AI model · ${pct}%`, pct);
                 });
               }
             });
             const input = text.length > 16000 ? text.slice(0, 16000) : text;
+            showProgressIndeterminate('Summarizing with on-device AI…');
             const summary = await summarizer.summarize(input);
             summarizer.destroy?.();
             return { summary, mode: 'AI · on-device' };
@@ -330,7 +367,7 @@
           console.warn('Summarizer API failed, falling back to extractive', err);
         }
       }
-      setStatus('Summarizing (extractive)…');
+      showProgressIndeterminate('Generating extractive summary…');
       return { summary: extractiveSummary(text), mode: 'extractive' };
     }
 
@@ -390,17 +427,19 @@
       const buf = await f.arrayBuffer();
       const doc = await pdfjsLib.getDocument({ data: buf }).promise;
       const pageLines = [];
-      for (let i = 1; i <= doc.numPages; i++) {
-        setStatus(`Reading PDF page ${i}/${doc.numPages}…`);
+      const total = doc.numPages;
+      for (let i = 1; i <= total; i++) {
+        showProgress(`Reading PDF page ${i}/${total}`, ((i - 1) / total) * 100);
         const page = await doc.getPage(i);
         const lines = await extractPageLines(page);
         const joined = lines.join(' ').trim();
         if (joined.length > 20) {
           pageLines.push(lines);
         } else {
-          pageLines.push([await ocrPdfPage(page, i, doc.numPages)]);
+          pageLines.push([await ocrPdfPage(page, i, total)]);
         }
       }
+      showProgress('Deduplicating headers/footers…', 100);
       const deduped = dedupPageLines(pageLines);
       return deduped.map(lines => lines.join('\n')).join('\n\n');
     }
@@ -466,21 +505,37 @@
     }
 
     async function ocrPdfPage(page, i, total) {
-      setStatus(`OCR page ${i}/${total} (slow)…`);
       const viewport = page.getViewport({ scale: 2.0 });
       const canvas = document.createElement('canvas');
       canvas.width = viewport.width;
       canvas.height = viewport.height;
       const ctx = canvas.getContext('2d');
       await page.render({ canvasContext: ctx, viewport }).promise;
-      const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+      const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
+        logger: m => {
+          const pagePct = m.progress || 0;
+          const overall = ((i - 1 + pagePct) / total) * 100;
+          const phase = m.status ? m.status.replace(/^\w/, c => c.toUpperCase()) : 'Processing';
+          showProgress(`OCR page ${i}/${total} · ${phase} ${Math.round(pagePct * 100)}%`, overall);
+        }
+      });
       return text;
     }
 
     async function readImage(f) {
-      setStatus('OCR image (first run downloads ~10 MB)…');
-      const { data: { text } } = await Tesseract.recognize(f, 'eng');
-      return text;
+      showProgress('Loading OCR engine…', 0);
+      try {
+        const { data: { text } } = await Tesseract.recognize(f, 'eng', {
+          logger: m => {
+            const pct = Math.round((m.progress || 0) * 100);
+            const phase = m.status ? m.status.replace(/^\w/, c => c.toUpperCase()) : 'Processing';
+            showProgress(`OCR · ${phase} ${pct}%`, pct);
+          }
+        });
+        return text;
+      } finally {
+        // hideProgress runs in the file handler's finally
+      }
     }
 
     clearEl.addEventListener('click', () => {
@@ -496,6 +551,27 @@
     });
 
     function setStatus(msg) { statusEl.textContent = msg; }
+
+    const pbarWrap = $('pbarWrap');
+    const pbarFill = $('pbarFill');
+    const pbarLabel = $('pbarLabel');
+    function showProgress(label, pct) {
+      pbarWrap.hidden = false;
+      pbarFill.classList.remove('indeterminate');
+      pbarFill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+      pbarLabel.textContent = label || '';
+    }
+    function showProgressIndeterminate(label) {
+      pbarWrap.hidden = false;
+      pbarFill.classList.add('indeterminate');
+      pbarLabel.textContent = label || '';
+    }
+    function hideProgress() {
+      pbarWrap.hidden = true;
+      pbarFill.classList.remove('indeterminate');
+      pbarFill.style.width = '0%';
+      pbarLabel.textContent = '';
+    }
 
     let chunks = [];
     let currentIdx = 0;
