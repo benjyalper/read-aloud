@@ -336,7 +336,7 @@
         }
         const combined = parts.filter(Boolean).join('\n\n');
         const isAuto = files.some(f => !f.name.toLowerCase().endsWith('.txt'));
-        const final = isAuto ? cleanupText(combined) : combined;
+        const final = isAuto ? reflowText(cleanupText(combined)) : combined;
         textEl.value = final.trim();
         const removed = totalRaw - final.length;
         const note = isAuto && removed > 0 ? ` · cleaned ${removed.toLocaleString()} chars` : '';
@@ -353,11 +353,11 @@
 
     $('cleanup').addEventListener('click', () => {
       const before = textEl.value;
-      const after = cleanupText(before);
+      const after = reflowText(cleanupText(before));
       textEl.value = after;
       const removed = before.length - after.length;
-      setStatus(removed > 0
-        ? `Cleaned ${removed.toLocaleString()} chars (${before.length.toLocaleString()} → ${after.length.toLocaleString()})`
+      setStatus(removed !== 0
+        ? `Cleaned & reflowed (${before.length.toLocaleString()} → ${after.length.toLocaleString()} chars)`
         : 'Nothing to clean.');
     });
 
@@ -521,6 +521,15 @@
         if (n >= threshold) drop.add(line);
       }
       return pageLines.map(lines => lines.filter(l => !drop.has(l)));
+    }
+
+    function reflowText(text) {
+      if (!text) return text;
+      text = text.replace(/([A-Za-z֐-׿])-\s*\n\s*([A-Za-z֐-׿])/g, '$1$2');
+      text = text.replace(/(?<!\n)\n(?!\n)/g, ' ');
+      text = text.replace(/[ \t]+/g, ' ');
+      text = text.replace(/\n{2,}/g, '\n\n');
+      return text.trim();
     }
 
     function cleanupText(text) {
