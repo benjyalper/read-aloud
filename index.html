@@ -177,7 +177,7 @@
     <h1>Read Aloud</h1>
 
     <section class="panel">
-      <textarea id="text" placeholder="Paste text here, or load a file below."></textarea>
+      <textarea id="text" dir="auto" placeholder="Paste text here, or load a file below."></textarea>
       <div class="row" style="margin-top: 10px;">
         <label class="btn secondary">
           <input type="file" id="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp" hidden>
@@ -188,7 +188,17 @@
         <button class="btn secondary" id="clear" type="button">Clear</button>
         <span id="status" class="status"></span>
       </div>
-      <div class="small" style="margin-top: 6px;">PDF, DOCX, TXT, or image (OCR).</div>
+      <div class="row" style="margin-top: 8px;">
+        <label style="display:flex; align-items:center; gap:8px;" class="small">
+          OCR language
+          <select id="ocrLang" style="min-width: 140px;">
+            <option value="eng">English</option>
+            <option value="heb">Hebrew (עברית)</option>
+            <option value="eng+heb">English + Hebrew</option>
+          </select>
+        </label>
+        <span class="small" style="opacity:0.7;">PDF, DOCX, TXT, or image.</span>
+      </div>
       <div id="pbarWrap" hidden style="margin-top: 10px;">
         <div class="pbar"><div class="pbar-fill" id="pbarFill"></div></div>
         <div class="pbar-label" id="pbarLabel"></div>
@@ -200,7 +210,7 @@
         <span class="small" style="flex:1;">Summary <span id="summaryMode" class="small" style="opacity:0.7;"></span></span>
         <button class="btn secondary" id="playSummary" type="button" style="min-height:34px; padding: 6px 12px; font-size:13px;">▶ Read summary</button>
       </div>
-      <textarea id="summary" placeholder="Generated summary will appear here." style="min-height: 140px;"></textarea>
+      <textarea id="summary" dir="auto" placeholder="Generated summary will appear here." style="min-height: 140px;"></textarea>
     </section>
 
     <section class="panel">
@@ -512,6 +522,10 @@
       return cleaned.trim();
     }
 
+    const ocrLangEl = $('ocrLang');
+    ocrLangEl.value = localStorage.getItem('ocrLang') || 'eng';
+    ocrLangEl.addEventListener('change', () => localStorage.setItem('ocrLang', ocrLangEl.value));
+
     async function ocrPdfPage(page, i, total) {
       const viewport = page.getViewport({ scale: 2.0 });
       const canvas = document.createElement('canvas');
@@ -519,7 +533,7 @@
       canvas.height = viewport.height;
       const ctx = canvas.getContext('2d');
       await page.render({ canvasContext: ctx, viewport }).promise;
-      const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
+      const { data: { text } } = await Tesseract.recognize(canvas, ocrLangEl.value, {
         logger: m => {
           const pagePct = m.progress || 0;
           const overall = ((i - 1 + pagePct) / total) * 100;
@@ -533,7 +547,7 @@
     async function readImage(f) {
       showProgress('Loading OCR engine…', 0);
       try {
-        const { data: { text } } = await Tesseract.recognize(f, 'eng', {
+        const { data: { text } } = await Tesseract.recognize(f, ocrLangEl.value, {
           logger: m => {
             const pct = Math.round((m.progress || 0) * 100);
             const phase = m.status ? m.status.replace(/^\w/, c => c.toUpperCase()) : 'Processing';
