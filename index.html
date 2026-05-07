@@ -146,6 +146,7 @@
           <input type="file" id="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp" hidden>
           Load file
         </label>
+        <button class="btn secondary" id="cleanup" type="button" title="Remove copyright/header/footer boilerplate">Clean up ✨</button>
         <button class="btn secondary" id="clear" type="button">Clear</button>
         <span id="status" class="status"></span>
       </div>
@@ -246,15 +247,29 @@
       if (!f) return;
       try {
         setStatus(`Reading ${f.name}…`);
-        const text = await readFile(f);
-        textEl.value = text.trim();
-        setStatus(`Loaded ${f.name} (${text.length.toLocaleString()} chars)`);
+        const raw = await readFile(f);
+        const isAuto = !f.name.toLowerCase().endsWith('.txt');
+        const final = isAuto ? cleanupText(raw) : raw;
+        textEl.value = final.trim();
+        const removed = raw.length - final.length;
+        const note = isAuto && removed > 0 ? ` · cleaned ${removed.toLocaleString()} chars` : '';
+        setStatus(`Loaded ${f.name} (${final.length.toLocaleString()} chars${note})`);
       } catch (err) {
         console.error(err);
         setStatus(`Error: ${err.message || err}`);
       } finally {
         fileEl.value = '';
       }
+    });
+
+    $('cleanup').addEventListener('click', () => {
+      const before = textEl.value;
+      const after = cleanupText(before);
+      textEl.value = after;
+      const removed = before.length - after.length;
+      setStatus(removed > 0
+        ? `Cleaned ${removed.toLocaleString()} chars (${before.length.toLocaleString()} → ${after.length.toLocaleString()})`
+        : 'Nothing to clean.');
     });
 
     async function readFile(f) {
@@ -275,19 +290,80 @@
     async function readPdf(f) {
       const buf = await f.arrayBuffer();
       const doc = await pdfjsLib.getDocument({ data: buf }).promise;
-      const parts = [];
+      const pageLines = [];
       for (let i = 1; i <= doc.numPages; i++) {
         setStatus(`Reading PDF page ${i}/${doc.numPages}…`);
         const page = await doc.getPage(i);
-        const tc = await page.getTextContent();
-        const pageText = tc.items.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
-        if (pageText.length > 20) {
-          parts.push(pageText);
+        const lines = await extractPageLines(page);
+        const joined = lines.join(' ').trim();
+        if (joined.length > 20) {
+          pageLines.push(lines);
         } else {
-          parts.push(await ocrPdfPage(page, i, doc.numPages));
+          pageLines.push([await ocrPdfPage(page, i, doc.numPages)]);
         }
       }
-      return parts.join('\n\n');
+      const deduped = dedupPageLines(pageLines);
+      return deduped.map(lines => lines.join('\n')).join('\n\n');
+    }
+
+    async function extractPageLines(page) {
+      const tc = await page.getTextContent();
+      const lineMap = new Map();
+      for (const item of tc.items) {
+        const y = Math.round(item.transform[5]);
+        if (!lineMap.has(y)) lineMap.set(y, []);
+        lineMap.get(y).push(item.str);
+      }
+      const ys = [...lineMap.keys()].sort((a, b) => b - a);
+      return ys
+        .map(y => lineMap.get(y).join(' ').replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+    }
+
+    function dedupPageLines(pageLines) {
+      if (pageLines.length < 3) return pageLines;
+      const counts = new Map();
+      for (const lines of pageLines) {
+        const seen = new Set();
+        for (const line of lines) {
+          if (line.length > 120 || seen.has(line)) continue;
+          seen.add(line);
+          counts.set(line, (counts.get(line) || 0) + 1);
+        }
+      }
+      const threshold = Math.ceil(pageLines.length * 0.5);
+      const drop = new Set();
+      for (const [line, n] of counts) {
+        if (n >= threshold) drop.add(line);
+      }
+      return pageLines.map(lines => lines.filter(l => !drop.has(l)));
+    }
+
+    function cleanupText(text) {
+      const ORG = '(?:Institute|Inc\\.?|Press|Publishing|Publications|Ltd\\.?|LLC|Foundation|Society|Association|University|Group|Co\\.?|Corporation|Company|Journal)';
+      const patterns = [
+        /\b\d{4}-\d{4}\/\d{2}\s+\$[\d.+]+/g,
+        new RegExp(`\\bCopyright\\s*©\\s*\\d{4}\\s+[A-Z][\\w.\\s&,]{0,150}?${ORG}\\b\\.?`, 'gi'),
+        new RegExp(`©\\s*\\d{4}\\s+[A-Z][\\w.\\s&,]{0,150}?${ORG}\\b\\.?`, 'g'),
+        /\bAll rights (?:of reproduction in any form )?reserved\.?/gi,
+        /\bFirst presented at[^.]+\./gi,
+        /\bOriginally published in[^.]+\./gi,
+        /\bReprinted (?:from|with permission)[^.]+\./gi,
+        /\bDownloaded (?:from|by)[^.]+\./gi,
+        /\b\d{1,5}\s+(?:[NSEW]\.?\s+)?(?:\d+(?:st|nd|rd|th)?|[A-Z]\w*)\s+(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Blvd\.?|Boulevard)\s*,?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,?\s*[A-Z]{2}\s+\d{5}/g,
+        /\b[A-Z][a-z][\w']*(?:\s+[A-Za-z][\w']*){0,8},\s*Vol\.\s*\d+,?\s*No\.\s*\d+\s*\(\d{4}\)(?:\s+\d{1,4}(?=\s|$))?/g,
+        /\bISSN[\s:]+\d{4}-\d{4}/gi,
+        /\bDOI[\s:]+10\.\d+\/\S+/gi,
+        /\bhttps?:\/\/(?:doi\.org|dx\.doi\.org)\/\S+/gi,
+        /^\s*Page\s+\d+\s+of\s+\d+\s*$/gim,
+        /^\s*\d+\s*$/gm,
+      ];
+      let cleaned = text;
+      for (const re of patterns) cleaned = cleaned.replace(re, '');
+      cleaned = cleaned.replace(/[ \t]+/g, ' ');
+      cleaned = cleaned.replace(/\n[ \t]+/g, '\n');
+      cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+      return cleaned.trim();
     }
 
     async function ocrPdfPage(page, i, total) {
