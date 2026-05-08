@@ -4,6 +4,15 @@ if (!globalThis.crypto) globalThis.crypto = webcrypto;
 import express from 'express';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 
+// msedge-tts can throw after a TTS request completes if Microsoft sends
+// trailing audio data for a stream we already destroyed. Don't let it kill us.
+process.on('uncaughtException', err => {
+  console.error('uncaughtException (kept alive):', err.message);
+});
+process.on('unhandledRejection', err => {
+  console.error('unhandledRejection (kept alive):', err);
+});
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_TEXT_LEN = 100000;
@@ -81,9 +90,11 @@ app.post('/api/tts', async (req, res) => {
 
   let closed = false;
   let activeTts = null;
-  req.on('close', () => {
-    closed = true;
-    try { activeTts?.close(); } catch {}
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      closed = true;
+      try { activeTts?.close(); } catch {}
+    }
   });
 
   res.setHeader('Content-Type', 'audio/mpeg');
@@ -91,29 +102,25 @@ app.post('/api/tts', async (req, res) => {
   res.setHeader('Content-Disposition', `inline; filename="read-aloud.mp3"`);
 
   const chunks = chunkBySentence(trimmed, CHUNK_SIZE);
+  res.setHeader('X-TTS-Chunks', String(chunks.length));
+  activeTts = new MsEdgeTTS();
   try {
-    for (const chunk of chunks) {
+    await activeTts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    for (let i = 0; i < chunks.length; i++) {
       if (closed) break;
-      activeTts = new MsEdgeTTS();
-      try {
-        await activeTts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-        const { audioStream } = activeTts.toStream(chunk, { rate: rateStr });
-        await new Promise((resolve, reject) => {
-          audioStream.on('data', d => { if (!closed) res.write(d); });
-          audioStream.on('end', resolve);
-          audioStream.on('error', reject);
-          audioStream.on('close', resolve);
-        });
-      } finally {
-        try { activeTts.close(); } catch {}
-        activeTts = null;
+      const { audioStream } = activeTts.toStream(chunks[i], { rate: rateStr });
+      for await (const data of audioStream) {
+        if (closed) break;
+        res.write(data);
       }
     }
+    try { activeTts.close(); } catch {}
+    activeTts = null;
     if (!closed) res.end();
   } catch (err) {
-    console.error('tts error', err);
+    console.error('[tts] error', err);
     if (!res.headersSent) res.status(500).json({ error: String(err.message || err) });
-    else res.end();
+    else { try { res.end(); } catch {} }
     try { activeTts?.close(); } catch {}
   }
 });

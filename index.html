@@ -827,6 +827,7 @@
           try { msg = JSON.parse(errText).error || errText; } catch {}
           throw new Error(msg);
         }
+        const totalChunks = Math.max(1, parseInt(r.headers.get('x-tts-chunks') || '1', 10));
         const reader = r.body.getReader();
         while (true) {
           const { done, value } = await reader.read();
@@ -834,7 +835,11 @@
           chunks.push(value);
           received += value.length;
           const pct = Math.min(99, Math.round((received / estimated) * 100));
-          showProgress(`Generating MP3 · ${pct}% · ${(received / 1024).toFixed(0)} KB`, pct);
+          const cIdx = totalChunks > 1
+            ? Math.min(totalChunks, 1 + Math.floor((received / estimated) * totalChunks))
+            : null;
+          const chunkLabel = cIdx ? ` · part ${cIdx}/${totalChunks}` : '';
+          showProgress(`Generating MP3 · ${pct}%${chunkLabel} · ${(received / 1024).toFixed(0)} KB`, pct);
         }
       } catch (err) {
         if (err.name === 'AbortError') {
