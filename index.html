@@ -618,7 +618,11 @@
     const rangeInputEl = $('partsRange');
     const rangeHintEl = $('rangeHint');
 
-    function parseRange(input, total) {
+    function partsHavePages() {
+      return docParts.length > 0 && docParts.some(p => p.pages);
+    }
+
+    function parsePartRange(input, total) {
       const trimmed = (input || '').trim();
       if (!trimmed) return Array.from({ length: total }, (_, i) => i + 1);
       const set = new Set();
@@ -642,14 +646,65 @@
       return invalid && list.length === 0 ? null : list;
     }
 
+    function parsePageRangeToParts(input) {
+      const trimmed = (input || '').trim();
+      if (!trimmed) return Array.from({ length: docParts.length }, (_, i) => i + 1);
+      const pageSet = new Set();
+      let invalid = false;
+      const cap = docTotalPages || 999999;
+      for (const seg of trimmed.split(',')) {
+        const s = seg.trim();
+        if (!s) continue;
+        if (s.includes('-')) {
+          const [a, b] = s.split('-').map(p => p.trim());
+          const from = a === '' ? 1 : parseInt(a, 10);
+          const to = b === '' ? cap : parseInt(b, 10);
+          if (isNaN(from) || isNaN(to) || from < 1 || to < 1) { invalid = true; continue; }
+          for (let i = from; i <= to; i++) pageSet.add(i);
+        } else {
+          const n = parseInt(s, 10);
+          if (isNaN(n) || n < 1) { invalid = true; continue; }
+          pageSet.add(n);
+        }
+      }
+      if (invalid && pageSet.size === 0) return null;
+      const result = [];
+      for (let i = 0; i < docParts.length; i++) {
+        const p = docParts[i];
+        if (!p.pages) continue;
+        let overlaps = false;
+        for (let pg = p.pages.from; pg <= p.pages.to; pg++) {
+          if (pageSet.has(pg)) { overlaps = true; break; }
+        }
+        if (overlaps) result.push(i + 1);
+      }
+      return result;
+    }
+
+    function parseRange(input, total) {
+      return partsHavePages() ? parsePageRangeToParts(input) : parsePartRange(input, total);
+    }
+
+    function updateRangePlaceholder() {
+      const byPages = partsHavePages();
+      rangeInputEl.placeholder = byPages
+        ? `all pages (or e.g. 5-22, 30-50)`
+        : `all parts (or e.g. 4-13, 50-55)`;
+    }
+
     function updateRangeHint() {
+      updateRangePlaceholder();
       if (!docParts.length) { rangeHintEl.textContent = ''; return; }
       const sel = parseRange(rangeInputEl.value, docParts.length);
       if (sel === null) { rangeHintEl.textContent = 'Invalid range.'; return; }
+      const byPages = partsHavePages();
+      const mode = byPages ? 'page' : 'part';
       if (sel.length === docParts.length) {
-        rangeHintEl.textContent = `Will generate all ${docParts.length} parts.`;
+        rangeHintEl.textContent = `Will generate all ${docParts.length} part${docParts.length === 1 ? '' : 's'} (${mode}-based).`;
+      } else if (sel.length === 0) {
+        rangeHintEl.textContent = `No parts match the selected ${mode}s.`;
       } else {
-        rangeHintEl.textContent = `Will generate ${sel.length} part${sel.length === 1 ? '' : 's'}.`;
+        rangeHintEl.textContent = `Will generate ${sel.length} part${sel.length === 1 ? '' : 's'} (${mode}-based).`;
       }
     }
     rangeInputEl.addEventListener('input', updateRangeHint);
@@ -769,9 +824,18 @@
       setTimeout(() => URL.revokeObjectURL(url), 5000);
 
       if (aborted && lastDonePartNum < docParts.length) {
-        rangeInputEl.value = `${lastDonePartNum + 1}-`;
+        const byPages = partsHavePages();
+        let resumeFrom;
+        if (byPages) {
+          const lastDonePart = docParts[lastDonePartNum - 1];
+          resumeFrom = (lastDonePart && lastDonePart.pages) ? lastDonePart.pages.to + 1 : lastDonePartNum + 1;
+        } else {
+          resumeFrom = lastDonePartNum + 1;
+        }
+        rangeInputEl.value = `${resumeFrom}-`;
         updateRangeHint();
-        setStatus(`Partial ZIP: ${completed} parts. Range pre-filled to resume from ${lastDonePartNum + 1}.`);
+        const what = byPages ? `page ${resumeFrom}` : `part ${resumeFrom}`;
+        setStatus(`Partial ZIP: ${completed} part${completed === 1 ? '' : 's'}. Range pre-filled to resume from ${what}.`);
       } else {
         setStatus(`ZIP ready: ${completed} part${completed === 1 ? '' : 's'} (${(zipBlob.size / 1024 / 1024).toFixed(1)} MB) downloaded`);
       }
