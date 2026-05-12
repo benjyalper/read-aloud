@@ -217,9 +217,11 @@
       </div>
       <div id="partsButtons" class="row" style="gap:6px;"></div>
       <div class="small" id="partActiveInfo" style="margin-top:8px; opacity:0.7;"></div>
-      <div class="row" style="margin-top:10px;">
-        <button class="btn" id="genAllParts" type="button" title="Generate MP3 for every part and download as ZIP">Generate all MP3s ⚡ (ZIP)</button>
+      <div class="row" style="margin-top:10px; gap:6px;">
+        <input type="text" id="partsRange" placeholder="all (or 4-13, 50-55, 100-)" autocomplete="off" style="flex:1; min-width:160px; background:transparent; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:14px; font-family:inherit; min-height:40px;">
+        <button class="btn" id="genAllParts" type="button" title="Generate MP3 for the selected parts and download as ZIP">Generate ⚡ (ZIP)</button>
       </div>
+      <div class="small" id="rangeHint" style="margin-top:6px; opacity:0.7;"></div>
     </section>
 
     <section class="panel" id="summaryPanel" hidden>
@@ -447,6 +449,7 @@
       } else {
         info.textContent = 'Tap a number to load that part into the text area.';
       }
+      if (typeof updateRangeHint === 'function') updateRangeHint();
     }
 
     function loadPart(i) {
@@ -478,8 +481,46 @@
     });
 
     let genAllAbort = null;
-    const GEN_ALL_IDLE = 'Generate all MP3s ⚡ (ZIP)';
+    const GEN_ALL_IDLE = 'Generate ⚡ (ZIP)';
     const GEN_ALL_BUSY = '⏹ Stop & save what we have';
+    const rangeInputEl = $('partsRange');
+    const rangeHintEl = $('rangeHint');
+
+    function parseRange(input, total) {
+      const trimmed = (input || '').trim();
+      if (!trimmed) return Array.from({ length: total }, (_, i) => i + 1);
+      const set = new Set();
+      let invalid = false;
+      for (const seg of trimmed.split(',')) {
+        const s = seg.trim();
+        if (!s) continue;
+        if (s.includes('-')) {
+          const [a, b] = s.split('-').map(p => p.trim());
+          const from = a === '' ? 1 : parseInt(a, 10);
+          const to = b === '' ? total : parseInt(b, 10);
+          if (isNaN(from) || isNaN(to) || from < 1 || to < 1) { invalid = true; continue; }
+          for (let i = Math.max(1, from); i <= Math.min(total, to); i++) set.add(i);
+        } else {
+          const n = parseInt(s, 10);
+          if (isNaN(n) || n < 1) { invalid = true; continue; }
+          if (n <= total) set.add(n);
+        }
+      }
+      const list = Array.from(set).sort((a, b) => a - b);
+      return invalid && list.length === 0 ? null : list;
+    }
+
+    function updateRangeHint() {
+      if (!docParts.length) { rangeHintEl.textContent = ''; return; }
+      const sel = parseRange(rangeInputEl.value, docParts.length);
+      if (sel === null) { rangeHintEl.textContent = 'Invalid range.'; return; }
+      if (sel.length === docParts.length) {
+        rangeHintEl.textContent = `Will generate all ${docParts.length} parts.`;
+      } else {
+        rangeHintEl.textContent = `Will generate ${sel.length} part${sel.length === 1 ? '' : 's'}.`;
+      }
+    }
+    rangeInputEl.addEventListener('input', updateRangeHint);
 
     $('genAllParts').addEventListener('click', async () => {
       if (genAllAbort) { genAllAbort.abort(); return; }
@@ -491,6 +532,8 @@
       }
       const voice = hqVoiceEl.value;
       if (!voice) { setStatus('Pick an HQ voice first.'); return; }
+      const selected = parseRange(rangeInputEl.value, docParts.length);
+      if (!selected || !selected.length) { setStatus('No valid parts selected.'); return; }
 
       const ratePct = Math.round((parseFloat(speedEl.value) - 1) * 100);
       genAllAbort = new AbortController();
@@ -505,18 +548,23 @@
         `Generated: ${new Date().toISOString()}`,
         `Voice: ${voice}`,
         `Rate: ${(parseFloat(speedEl.value)).toFixed(1)}x`,
+        `Range: ${rangeInputEl.value.trim() || 'all'}`,
+        `Parts: ${selected[0]}-${selected[selected.length - 1]} of ${docParts.length} (${selected.length} selected)`,
         ``,
       ];
       let completed = 0;
+      let lastDonePartNum = 0;
       let aborted = false;
 
       try {
-        for (let i = 0; i < docParts.length; i++) {
+        for (let pos = 0; pos < selected.length; pos++) {
           if (genAllAbort.signal.aborted) { aborted = true; break; }
-          const p = docParts[i];
-          const partNum = String(i + 1).padStart(padding, '0');
+          const partNum = selected[pos];
+          const idx = partNum - 1;
+          const p = docParts[idx];
+          const padded = String(partNum).padStart(padding, '0');
           const totalNum = String(docParts.length);
-          showProgress(`Generating part ${i + 1}/${docParts.length}…`, (i / docParts.length) * 100);
+          showProgress(`Part ${partNum} (${pos + 1}/${selected.length})…`, (pos / selected.length) * 100);
           const r = await fetch('/api/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -527,20 +575,21 @@
             const errText = await r.text().catch(() => '');
             let msg = errText;
             try { msg = JSON.parse(errText).error || errText; } catch {}
-            throw new Error(`Part ${i + 1}: ${msg || r.status}`);
+            throw new Error(`Part ${partNum}: ${msg || r.status}`);
           }
           const blob = await r.blob();
-          const filename = `${partNum}-of-${totalNum}.mp3`;
+          const filename = `${padded}-of-${totalNum}.mp3`;
           zip.file(filename, blob);
           manifestLines.push(`${filename}  ${p.words.toLocaleString()} words  ${(blob.size / 1024).toFixed(0)} KB`);
           completed++;
+          lastDonePartNum = partNum;
         }
       } catch (err) {
         if (err.name === 'AbortError') {
           aborted = true;
         } else {
           console.error(err);
-          setStatus(`Stopped at part ${completed + 1}: ${err.message || err}`);
+          setStatus(`Stopped at part ${lastDonePartNum + 1}: ${err.message || err}`);
         }
       }
 
@@ -563,14 +612,22 @@
       const a = document.createElement('a');
       a.href = url;
       const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      a.download = `read-aloud-parts-${stamp}.zip`;
+      const rangeTag = (selected.length === docParts.length)
+        ? 'all'
+        : `${selected[0]}-${selected[selected.length - 1]}`;
+      a.download = `read-aloud-${rangeTag}-${stamp}.zip`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-      setStatus(aborted
-        ? `Partial ZIP: ${completed}/${docParts.length} parts (${(zipBlob.size / 1024 / 1024).toFixed(1)} MB)`
-        : `ZIP ready: ${completed} parts (${(zipBlob.size / 1024 / 1024).toFixed(1)} MB) downloaded`);
+
+      if (aborted && lastDonePartNum < docParts.length) {
+        rangeInputEl.value = `${lastDonePartNum + 1}-`;
+        updateRangeHint();
+        setStatus(`Partial ZIP: ${completed} parts. Range pre-filled to resume from ${lastDonePartNum + 1}.`);
+      } else {
+        setStatus(`ZIP ready: ${completed} part${completed === 1 ? '' : 's'} (${(zipBlob.size / 1024 / 1024).toFixed(1)} MB) downloaded`);
+      }
     });
 
     $('clearParts').addEventListener('click', () => {
