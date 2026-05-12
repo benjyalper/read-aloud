@@ -189,6 +189,7 @@
         </label>
         <button class="btn secondary" id="cleanup" type="button" title="Remove copyright/header/footer boilerplate">Clean up ✨</button>
         <button class="btn secondary" id="summarize" type="button" title="Generate a summary">Summarize ✨</button>
+        <button class="btn secondary" id="split" type="button" title="Split long text into numbered parts">Split ✂️</button>
         <button class="btn secondary" id="clear" type="button">Clear</button>
         <span id="status" class="status"></span>
       </div>
@@ -207,6 +208,15 @@
         <div class="pbar"><div class="pbar-fill" id="pbarFill"></div></div>
         <div class="pbar-label" id="pbarLabel"></div>
       </div>
+    </section>
+
+    <section class="panel" id="partsPanel" hidden>
+      <div class="row" style="margin-bottom: 8px;">
+        <span class="small" id="partsLabel" style="flex:1;">Parts</span>
+        <button class="btn secondary" id="clearParts" type="button" style="min-height:32px; padding: 6px 10px; font-size:13px;">Clear parts</button>
+      </div>
+      <div id="partsButtons" class="row" style="gap:6px;"></div>
+      <div class="small" id="partActiveInfo" style="margin-top:8px; opacity:0.7;"></div>
     </section>
 
     <section class="panel" id="summaryPanel" hidden>
@@ -352,6 +362,126 @@
         hideProgress();
       }
     });
+
+    const PARTS_STORAGE_KEY = 'readaloud.parts.v1';
+    const PART_SIZE = 10000;
+    let docParts = [];
+    let activePartIdx = -1;
+
+    function splitTextIntoParts(text, maxLen) {
+      const sentences = text.replace(/\s+/g, ' ').split(/(?<=[.!?…])\s+/).map(s => s.trim()).filter(Boolean);
+      const out = [];
+      let buf = '';
+      for (const s of sentences) {
+        if ((buf + ' ' + s).trim().length > maxLen && buf) {
+          out.push(buf.trim());
+          buf = s;
+        } else {
+          buf = (buf + ' ' + s).trim();
+        }
+      }
+      if (buf) out.push(buf.trim());
+      return out;
+    }
+
+    function persistParts() {
+      try {
+        localStorage.setItem(PARTS_STORAGE_KEY, JSON.stringify({ parts: docParts, activePartIdx }));
+      } catch (e) {
+        console.error('Failed to persist parts:', e);
+        setStatus('Could not save parts to storage (may be full).');
+      }
+    }
+
+    function restoreParts() {
+      try {
+        const raw = localStorage.getItem(PARTS_STORAGE_KEY);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (Array.isArray(data.parts) && data.parts.length) {
+          docParts = data.parts;
+          activePartIdx = typeof data.activePartIdx === 'number' ? data.activePartIdx : -1;
+          renderParts();
+        }
+      } catch (e) {
+        console.warn('Could not restore parts:', e);
+      }
+    }
+
+    function renderParts() {
+      const panel = $('partsPanel');
+      const btns = $('partsButtons');
+      const label = $('partsLabel');
+      const info = $('partActiveInfo');
+      btns.innerHTML = '';
+      if (!docParts.length) {
+        panel.hidden = true;
+        info.textContent = '';
+        return;
+      }
+      panel.hidden = false;
+      const totalChars = docParts.reduce((a, p) => a + p.text.length, 0);
+      const totalWords = docParts.reduce((a, p) => a + p.words, 0);
+      label.textContent = `${docParts.length} parts · ${totalWords.toLocaleString()} words · ${totalChars.toLocaleString()} chars`;
+      for (let i = 0; i < docParts.length; i++) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn ' + (i === activePartIdx ? '' : 'secondary');
+        btn.style.minWidth = '46px';
+        btn.style.padding = '8px 10px';
+        btn.style.fontSize = '14px';
+        btn.style.flex = '0 0 auto';
+        btn.textContent = String(i + 1);
+        const p = docParts[i];
+        btn.title = `Part ${i + 1}/${docParts.length} · ${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars`;
+        btn.addEventListener('click', () => loadPart(i));
+        btns.appendChild(btn);
+      }
+      if (activePartIdx >= 0 && docParts[activePartIdx]) {
+        const p = docParts[activePartIdx];
+        info.textContent = `Showing part ${activePartIdx + 1} of ${docParts.length} (${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars)`;
+      } else {
+        info.textContent = 'Tap a number to load that part into the text area.';
+      }
+    }
+
+    function loadPart(i) {
+      if (!docParts[i]) return;
+      stop();
+      activePartIdx = i;
+      textEl.value = docParts[i].text;
+      updateTextStats();
+      persistParts();
+      renderParts();
+      setStatus(`Loaded part ${i + 1}/${docParts.length}`);
+    }
+
+    $('split').addEventListener('click', () => {
+      const text = textEl.value.trim();
+      if (!text) { setStatus('Nothing to split.'); return; }
+      const segments = splitTextIntoParts(text, PART_SIZE);
+      if (segments.length < 2) {
+        setStatus(`Text fits in one part (${text.length.toLocaleString()} chars; ${PART_SIZE.toLocaleString()} max).`);
+        return;
+      }
+      docParts = segments.map(t => ({ text: t, chars: t.length, words: wordCount(t) }));
+      activePartIdx = 0;
+      textEl.value = docParts[0].text;
+      updateTextStats();
+      persistParts();
+      renderParts();
+      setStatus(`Split into ${docParts.length} parts. Loaded part 1.`);
+    });
+
+    $('clearParts').addEventListener('click', () => {
+      docParts = [];
+      activePartIdx = -1;
+      try { localStorage.removeItem(PARTS_STORAGE_KEY); } catch {}
+      renderParts();
+      setStatus('Parts cleared.');
+    });
+
+    restoreParts();
 
     $('cleanup').addEventListener('click', () => {
       const before = textEl.value;
@@ -610,6 +740,10 @@
       const su = document.getElementById('summary');
       if (sp) sp.hidden = true;
       if (su) su.value = '';
+      docParts = [];
+      activePartIdx = -1;
+      try { localStorage.removeItem(PARTS_STORAGE_KEY); } catch {}
+      renderParts();
       setStatus('');
     });
 
