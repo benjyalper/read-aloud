@@ -217,6 +217,9 @@
       </div>
       <div id="partsButtons" class="row" style="gap:6px;"></div>
       <div class="small" id="partActiveInfo" style="margin-top:8px; opacity:0.7;"></div>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn" id="genAllParts" type="button" title="Generate MP3 for every part and download as ZIP">Generate all MP3s ⚡ (ZIP)</button>
+      </div>
     </section>
 
     <section class="panel" id="summaryPanel" hidden>
@@ -269,6 +272,7 @@
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 
   <script>
     if (window.pdfjsLib) {
@@ -471,6 +475,102 @@
       persistParts();
       renderParts();
       setStatus(`Split into ${docParts.length} parts. Loaded part 1.`);
+    });
+
+    let genAllAbort = null;
+    const GEN_ALL_IDLE = 'Generate all MP3s ⚡ (ZIP)';
+    const GEN_ALL_BUSY = '⏹ Stop & save what we have';
+
+    $('genAllParts').addEventListener('click', async () => {
+      if (genAllAbort) { genAllAbort.abort(); return; }
+      if (!docParts.length) { setStatus('No parts to generate. Split first.'); return; }
+      if (typeof JSZip === 'undefined') { setStatus('ZIP library failed to load.'); return; }
+      if (hqGenerateEl.disabled || hqGenerateEl.textContent === HQ_LABEL_BUSY) {
+        setStatus('Single MP3 generation in progress — stop that first.');
+        return;
+      }
+      const voice = hqVoiceEl.value;
+      if (!voice) { setStatus('Pick an HQ voice first.'); return; }
+
+      const ratePct = Math.round((parseFloat(speedEl.value) - 1) * 100);
+      genAllAbort = new AbortController();
+      const btn = $('genAllParts');
+      btn.textContent = GEN_ALL_BUSY;
+      hqGenerateEl.disabled = true;
+
+      const zip = new JSZip();
+      const padding = String(docParts.length).length;
+      const manifestLines = [
+        `Read Aloud — Part files`,
+        `Generated: ${new Date().toISOString()}`,
+        `Voice: ${voice}`,
+        `Rate: ${(parseFloat(speedEl.value)).toFixed(1)}x`,
+        ``,
+      ];
+      let completed = 0;
+      let aborted = false;
+
+      try {
+        for (let i = 0; i < docParts.length; i++) {
+          if (genAllAbort.signal.aborted) { aborted = true; break; }
+          const p = docParts[i];
+          const partNum = String(i + 1).padStart(padding, '0');
+          const totalNum = String(docParts.length);
+          showProgress(`Generating part ${i + 1}/${docParts.length}…`, (i / docParts.length) * 100);
+          const r = await fetch('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: p.text, voice, rate: ratePct }),
+            signal: genAllAbort.signal,
+          });
+          if (!r.ok) {
+            const errText = await r.text().catch(() => '');
+            let msg = errText;
+            try { msg = JSON.parse(errText).error || errText; } catch {}
+            throw new Error(`Part ${i + 1}: ${msg || r.status}`);
+          }
+          const blob = await r.blob();
+          const filename = `${partNum}-of-${totalNum}.mp3`;
+          zip.file(filename, blob);
+          manifestLines.push(`${filename}  ${p.words.toLocaleString()} words  ${(blob.size / 1024).toFixed(0)} KB`);
+          completed++;
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          aborted = true;
+        } else {
+          console.error(err);
+          setStatus(`Stopped at part ${completed + 1}: ${err.message || err}`);
+        }
+      }
+
+      genAllAbort = null;
+      btn.textContent = GEN_ALL_IDLE;
+      hqGenerateEl.disabled = false;
+
+      if (completed === 0) {
+        hideProgress();
+        setStatus(aborted ? 'Cancelled. Nothing to download.' : 'No parts generated.');
+        return;
+      }
+
+      showProgressIndeterminate(`Building ZIP (${completed} part${completed === 1 ? '' : 's'})…`);
+      zip.file('manifest.txt', manifestLines.join('\n'));
+      const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+      hideProgress();
+
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.download = `read-aloud-parts-${stamp}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setStatus(aborted
+        ? `Partial ZIP: ${completed}/${docParts.length} parts (${(zipBlob.size / 1024 / 1024).toFixed(1)} MB)`
+        : `ZIP ready: ${completed} parts (${(zipBlob.size / 1024 / 1024).toFixed(1)} MB) downloaded`);
     });
 
     $('clearParts').addEventListener('click', () => {
