@@ -401,6 +401,47 @@
       return { from: overlap[0].page, to: overlap[overlap.length - 1].page };
     }
 
+    function splitByPageBoundaries(text, pageMap, maxLen) {
+      const parts = [];
+      let i = 0;
+      while (i < pageMap.length) {
+        const p = pageMap[i];
+        const pageLen = p.end - p.start;
+        if (pageLen > maxLen) {
+          // Single page is bigger than maxLen — sub-split this page only.
+          const subParts = splitTextIntoPartsWithOffsets(text.slice(p.start, p.end), maxLen);
+          for (let k = 0; k < subParts.length; k++) {
+            const sp = subParts[k];
+            parts.push({
+              start: p.start + sp.start,
+              end: p.start + sp.end,
+              text: sp.text,
+              pages: { from: p.page, to: p.page },
+              subIndex: subParts.length > 1 ? k : undefined,
+              subTotal: subParts.length > 1 ? subParts.length : undefined,
+            });
+          }
+          i++;
+          continue;
+        }
+        // Pack consecutive pages until adding the next would exceed maxLen
+        let lastIdx = i;
+        for (let j = i + 1; j < pageMap.length; j++) {
+          if (pageMap[j].end - p.start > maxLen) break;
+          lastIdx = j;
+        }
+        const last = pageMap[lastIdx];
+        parts.push({
+          start: p.start,
+          end: last.end,
+          text: text.slice(p.start, last.end).trim(),
+          pages: { from: p.page, to: last.page },
+        });
+        i = lastIdx + 1;
+      }
+      return parts;
+    }
+
     function splitTextIntoPartsWithOffsets(text, maxLen) {
       // Find sentence boundaries (end positions) without altering the text.
       const re = /[.!?…]+\s*/g;
@@ -497,9 +538,14 @@
         btn.style.fontSize = '14px';
         btn.style.flex = '0 0 auto';
         if (p.pages) {
-          btn.textContent = p.pages.from === p.pages.to ? `${p.pages.from}` : `${p.pages.from}–${p.pages.to}`;
+          const suffix = p.subTotal ? String.fromCharCode(97 + p.subIndex) : '';
+          const pageLabel = p.pages.from === p.pages.to
+            ? `${p.pages.from}${suffix}`
+            : `${p.pages.from}–${p.pages.to}${suffix}`;
+          btn.textContent = pageLabel;
           btn.style.minWidth = '64px';
-          btn.title = `Part ${i + 1}/${docParts.length} · pp ${p.pages.from}-${p.pages.to} · ${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars`;
+          const subTag = p.subTotal ? ` (segment ${p.subIndex + 1}/${p.subTotal})` : '';
+          btn.title = `Part ${i + 1}/${docParts.length} · pp ${p.pages.from}-${p.pages.to}${subTag} · ${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars`;
         } else {
           btn.textContent = String(i + 1);
           btn.style.minWidth = '46px';
@@ -540,11 +586,20 @@
         return;
       }
       const pageMapIsValid = docPageMap && text === docOriginalText;
-      docParts = segments.map(seg => {
+      const usePageAligned = pageMapIsValid && docPageMap.length > 0;
+      const partsSource = usePageAligned
+        ? splitByPageBoundaries(text, docPageMap, PART_SIZE)
+        : segments;
+      docParts = partsSource.map(seg => {
         const part = { text: seg.text, chars: seg.text.length, words: wordCount(seg.text) };
-        if (pageMapIsValid) {
+        if (seg.pages) part.pages = seg.pages;
+        else if (pageMapIsValid) {
           const pr = pageRangeFromMap(seg.start, seg.end, docPageMap);
           if (pr) part.pages = pr;
+        }
+        if (seg.subIndex !== undefined) {
+          part.subIndex = seg.subIndex;
+          part.subTotal = seg.subTotal;
         }
         return part;
       });
@@ -626,7 +681,10 @@
         if (part.pages) {
           const f = String(part.pages.from).padStart(pagePadding, '0');
           const t = String(part.pages.to).padStart(pagePadding, '0');
-          return part.pages.from === part.pages.to ? `pp-${f}.mp3` : `pp-${f}-${t}.mp3`;
+          const suffix = part.subTotal ? `-${String.fromCharCode(97 + part.subIndex)}` : '';
+          return part.pages.from === part.pages.to
+            ? `pp-${f}${suffix}.mp3`
+            : `pp-${f}-${t}${suffix}.mp3`;
         }
         return `${String(partNum).padStart(padding, '0')}-of-${docParts.length}.mp3`;
       }
