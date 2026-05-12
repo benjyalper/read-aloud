@@ -343,11 +343,15 @@
       try {
         const parts = [];
         let totalRaw = 0;
+        let pdfPageCount = 0;
+        let pdfCount = 0;
         for (let i = 0; i < files.length; i++) {
           const f = files[i];
           const label = files.length > 1 ? `${i + 1}/${files.length}: ${f.name}` : f.name;
           setStatus(`Reading ${label}…`);
-          const raw = await readFile(f);
+          const result = await readFile(f);
+          const raw = result.text;
+          if (result.pageCount) { pdfPageCount += result.pageCount; pdfCount++; }
           parts.push(raw.trim());
           totalRaw += raw.length;
         }
@@ -356,10 +360,12 @@
         const final = isAuto ? reflowText(cleanupText(combined)) : combined;
         textEl.value = final.trim();
         updateTextStats();
+        docTotalPages = (files.length === 1 && pdfCount === 1) ? pdfPageCount : 0;
         const removed = totalRaw - final.length;
         const note = isAuto && removed > 0 ? ` · cleaned ${removed.toLocaleString()} chars` : '';
+        const pageNote = docTotalPages ? ` · ${docTotalPages} pages` : '';
         const what = files.length > 1 ? `${files.length} files` : files[0].name;
-        setStatus(`Loaded ${what} (${wordCount(final).toLocaleString()} words · ${final.length.toLocaleString()} chars${note})`);
+        setStatus(`Loaded ${what} (${wordCount(final).toLocaleString()} words · ${final.length.toLocaleString()} chars${note}${pageNote})`);
       } catch (err) {
         console.error(err);
         setStatus(`Error: ${err.message || err}`);
@@ -373,6 +379,14 @@
     const PART_SIZE = 10000;
     let docParts = [];
     let activePartIdx = -1;
+    let docTotalPages = 0;
+
+    function partPageRange(startOffset, endOffset, totalChars, totalPages) {
+      if (!totalPages || !totalChars) return null;
+      const pStart = 1 + Math.floor((startOffset / totalChars) * totalPages);
+      const pEnd = 1 + Math.min(totalPages - 1, Math.floor(Math.max(0, endOffset - 1) / totalChars * totalPages));
+      return { from: pStart, to: Math.max(pStart, pEnd) };
+    }
 
     function splitTextIntoParts(text, maxLen) {
       const sentences = text.replace(/\s+/g, ' ').split(/(?<=[.!?…])\s+/).map(s => s.trim()).filter(Boolean);
@@ -392,7 +406,7 @@
 
     function persistParts() {
       try {
-        localStorage.setItem(PARTS_STORAGE_KEY, JSON.stringify({ parts: docParts, activePartIdx }));
+        localStorage.setItem(PARTS_STORAGE_KEY, JSON.stringify({ parts: docParts, activePartIdx, totalPages: docTotalPages }));
       } catch (e) {
         console.error('Failed to persist parts:', e);
         setStatus('Could not save parts to storage (may be full).');
@@ -407,6 +421,7 @@
         if (Array.isArray(data.parts) && data.parts.length) {
           docParts = data.parts;
           activePartIdx = typeof data.activePartIdx === 'number' ? data.activePartIdx : -1;
+          docTotalPages = typeof data.totalPages === 'number' ? data.totalPages : 0;
           renderParts();
         }
       } catch (e) {
@@ -439,13 +454,15 @@
         btn.style.flex = '0 0 auto';
         btn.textContent = String(i + 1);
         const p = docParts[i];
-        btn.title = `Part ${i + 1}/${docParts.length} · ${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars`;
+        const pageTag = p.pages ? (p.pages.from === p.pages.to ? ` · p ${p.pages.from}` : ` · pp ${p.pages.from}-${p.pages.to}`) : '';
+        btn.title = `Part ${i + 1}/${docParts.length}${pageTag} · ${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars`;
         btn.addEventListener('click', () => loadPart(i));
         btns.appendChild(btn);
       }
       if (activePartIdx >= 0 && docParts[activePartIdx]) {
         const p = docParts[activePartIdx];
-        info.textContent = `Showing part ${activePartIdx + 1} of ${docParts.length} (${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars)`;
+        const pageTag = p.pages ? (p.pages.from === p.pages.to ? ` · approx p ${p.pages.from}` : ` · approx pp ${p.pages.from}-${p.pages.to}`) : '';
+        info.textContent = `Showing part ${activePartIdx + 1} of ${docParts.length}${pageTag} (${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars)`;
       } else {
         info.textContent = 'Tap a number to load that part into the text area.';
       }
@@ -471,7 +488,15 @@
         setStatus(`Text fits in one part (${text.length.toLocaleString()} chars; ${PART_SIZE.toLocaleString()} max).`);
         return;
       }
-      docParts = segments.map(t => ({ text: t, chars: t.length, words: wordCount(t) }));
+      const totalChars = segments.reduce((a, s) => a + s.length, 0);
+      let cum = 0;
+      docParts = segments.map(t => {
+        const start = cum; cum += t.length;
+        const part = { text: t, chars: t.length, words: wordCount(t) };
+        const pr = partPageRange(start, cum, totalChars, docTotalPages);
+        if (pr) part.pages = pr;
+        return part;
+      });
       activePartIdx = 0;
       textEl.value = docParts[0].text;
       updateTextStats();
@@ -543,6 +568,16 @@
 
       const zip = new JSZip();
       const padding = String(docParts.length).length;
+      const pagePadding = String(docTotalPages || 1).length;
+      const hasPages = docParts.some(p => p.pages);
+      function partFilename(partNum, part) {
+        if (part.pages) {
+          const f = String(part.pages.from).padStart(pagePadding, '0');
+          const t = String(part.pages.to).padStart(pagePadding, '0');
+          return part.pages.from === part.pages.to ? `pp-${f}.mp3` : `pp-${f}-${t}.mp3`;
+        }
+        return `${String(partNum).padStart(padding, '0')}-of-${docParts.length}.mp3`;
+      }
       const manifestLines = [
         `Read Aloud — Part files`,
         `Generated: ${new Date().toISOString()}`,
@@ -550,8 +585,9 @@
         `Rate: ${(parseFloat(speedEl.value)).toFixed(1)}x`,
         `Range: ${rangeInputEl.value.trim() || 'all'}`,
         `Parts: ${selected[0]}-${selected[selected.length - 1]} of ${docParts.length} (${selected.length} selected)`,
+        docTotalPages ? `Source pages: ${docTotalPages} (filenames use approximate page ranges)` : '',
         ``,
-      ];
+      ].filter(Boolean);
       let completed = 0;
       let lastDonePartNum = 0;
       let aborted = false;
@@ -578,9 +614,10 @@
             throw new Error(`Part ${partNum}: ${msg || r.status}`);
           }
           const blob = await r.blob();
-          const filename = `${padded}-of-${totalNum}.mp3`;
+          const filename = partFilename(partNum, p);
+          const pageTag = p.pages ? ` (${p.pages.from === p.pages.to ? 'p ' + p.pages.from : 'pp ' + p.pages.from + '-' + p.pages.to})` : '';
           zip.file(filename, blob);
-          manifestLines.push(`${filename}  ${p.words.toLocaleString()} words  ${(blob.size / 1024).toFixed(0)} KB`);
+          manifestLines.push(`${filename}  part ${partNum}${pageTag}  ${p.words.toLocaleString()} words  ${(blob.size / 1024).toFixed(0)} KB`);
           completed++;
           lastDonePartNum = partNum;
         }
@@ -633,6 +670,7 @@
     $('clearParts').addEventListener('click', () => {
       docParts = [];
       activePartIdx = -1;
+      docTotalPages = 0;
       try { localStorage.removeItem(PARTS_STORAGE_KEY); } catch {}
       renderParts();
       setStatus('Parts cleared.');
@@ -746,10 +784,10 @@
 
     async function readFile(f) {
       const name = f.name.toLowerCase();
-      if (name.endsWith('.txt')) return await f.text();
-      if (name.endsWith('.docx')) return await readDocx(f);
+      if (name.endsWith('.txt')) return { text: await f.text() };
+      if (name.endsWith('.docx')) return { text: await readDocx(f) };
       if (name.endsWith('.pdf')) return await readPdf(f);
-      if (f.type.startsWith('image/')) return await readImage(f);
+      if (f.type.startsWith('image/')) return { text: await readImage(f) };
       throw new Error(`Unsupported file: ${f.name}`);
     }
 
@@ -777,7 +815,7 @@
       }
       showProgress('Deduplicating headers/footers…', 100);
       const deduped = dedupPageLines(pageLines);
-      return deduped.map(lines => lines.join('\n')).join('\n\n');
+      return { text: deduped.map(lines => lines.join('\n')).join('\n\n'), pageCount: total };
     }
 
     async function extractPageLines(page) {
@@ -899,6 +937,7 @@
       if (su) su.value = '';
       docParts = [];
       activePartIdx = -1;
+      docTotalPages = 0;
       try { localStorage.removeItem(PARTS_STORAGE_KEY); } catch {}
       renderParts();
       setStatus('');
