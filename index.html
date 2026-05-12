@@ -343,6 +343,7 @@
       try {
         const parts = [];
         let totalRaw = 0;
+        let lastResult = null;
         let pdfPageCount = 0;
         let pdfCount = 0;
         for (let i = 0; i < files.length; i++) {
@@ -350,17 +351,27 @@
           const label = files.length > 1 ? `${i + 1}/${files.length}: ${f.name}` : f.name;
           setStatus(`Reading ${label}…`);
           const result = await readFile(f);
+          lastResult = result;
           const raw = result.text;
           if (result.pageCount) { pdfPageCount += result.pageCount; pdfCount++; }
           parts.push(raw.trim());
           totalRaw += raw.length;
         }
         const combined = parts.filter(Boolean).join('\n\n');
+        const singlePrecleanedPdf = files.length === 1 && lastResult && lastResult.isPreCleaned;
         const isAuto = files.some(f => !f.name.toLowerCase().endsWith('.txt'));
-        const final = isAuto ? reflowText(cleanupText(combined)) : combined;
+        const final = (isAuto && !singlePrecleanedPdf) ? reflowText(cleanupText(combined)) : combined;
         textEl.value = final.trim();
         updateTextStats();
-        docTotalPages = (files.length === 1 && pdfCount === 1) ? pdfPageCount : 0;
+        if (singlePrecleanedPdf) {
+          docTotalPages = pdfPageCount;
+          docPageMap = lastResult.pageMap;
+          docOriginalText = textEl.value;
+        } else {
+          docTotalPages = (files.length === 1 && pdfCount === 1) ? pdfPageCount : 0;
+          docPageMap = null;
+          docOriginalText = '';
+        }
         const removed = totalRaw - final.length;
         const note = isAuto && removed > 0 ? ` · cleaned ${removed.toLocaleString()} chars` : '';
         const pageNote = docTotalPages ? ` · ${docTotalPages} pages` : '';
@@ -380,12 +391,45 @@
     let docParts = [];
     let activePartIdx = -1;
     let docTotalPages = 0;
+    let docPageMap = null;
+    let docOriginalText = '';
 
-    function partPageRange(startOffset, endOffset, totalChars, totalPages) {
-      if (!totalPages || !totalChars) return null;
-      const pStart = 1 + Math.floor((startOffset / totalChars) * totalPages);
-      const pEnd = 1 + Math.min(totalPages - 1, Math.floor(Math.max(0, endOffset - 1) / totalChars * totalPages));
-      return { from: pStart, to: Math.max(pStart, pEnd) };
+    function pageRangeFromMap(startOffset, endOffset, pageMap) {
+      if (!pageMap || !pageMap.length) return null;
+      const overlap = pageMap.filter(pm => pm.start < endOffset && pm.end > startOffset);
+      if (!overlap.length) return null;
+      return { from: overlap[0].page, to: overlap[overlap.length - 1].page };
+    }
+
+    function splitTextIntoPartsWithOffsets(text, maxLen) {
+      // Find sentence boundaries (end positions) without altering the text.
+      const re = /[.!?…]+\s*/g;
+      const ends = [];
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        ends.push(m.index + m[0].length);
+        if (m.index === re.lastIndex) re.lastIndex++;
+      }
+      if (ends[ends.length - 1] !== text.length) ends.push(text.length);
+      const sentences = [];
+      let lastEnd = 0;
+      for (const end of ends) {
+        if (end > lastEnd) { sentences.push({ start: lastEnd, end }); lastEnd = end; }
+      }
+      const parts = [];
+      let curStart = -1, curEnd = 0;
+      for (const s of sentences) {
+        const sLen = s.end - s.start;
+        if (curStart < 0) { curStart = s.start; curEnd = s.end; continue; }
+        if ((curEnd - curStart) + sLen > maxLen) {
+          parts.push({ start: curStart, end: curEnd });
+          curStart = s.start; curEnd = s.end;
+        } else {
+          curEnd = s.end;
+        }
+      }
+      if (curStart >= 0 && curEnd > curStart) parts.push({ start: curStart, end: curEnd });
+      return parts.map(p => ({ start: p.start, end: p.end, text: text.slice(p.start, p.end).trim() }));
     }
 
     function splitTextIntoParts(text, maxLen) {
@@ -445,26 +489,32 @@
       const totalWords = docParts.reduce((a, p) => a + p.words, 0);
       label.textContent = `${docParts.length} parts · ${totalWords.toLocaleString()} words · ${totalChars.toLocaleString()} chars`;
       for (let i = 0; i < docParts.length; i++) {
+        const p = docParts[i];
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'btn ' + (i === activePartIdx ? '' : 'secondary');
-        btn.style.minWidth = '46px';
         btn.style.padding = '8px 10px';
         btn.style.fontSize = '14px';
         btn.style.flex = '0 0 auto';
-        btn.textContent = String(i + 1);
-        const p = docParts[i];
-        const pageTag = p.pages ? (p.pages.from === p.pages.to ? ` · p ${p.pages.from}` : ` · pp ${p.pages.from}-${p.pages.to}`) : '';
-        btn.title = `Part ${i + 1}/${docParts.length}${pageTag} · ${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars`;
+        if (p.pages) {
+          btn.textContent = p.pages.from === p.pages.to ? `${p.pages.from}` : `${p.pages.from}–${p.pages.to}`;
+          btn.style.minWidth = '64px';
+          btn.title = `Part ${i + 1}/${docParts.length} · pp ${p.pages.from}-${p.pages.to} · ${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars`;
+        } else {
+          btn.textContent = String(i + 1);
+          btn.style.minWidth = '46px';
+          btn.title = `Part ${i + 1}/${docParts.length} · ${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars`;
+        }
         btn.addEventListener('click', () => loadPart(i));
         btns.appendChild(btn);
       }
       if (activePartIdx >= 0 && docParts[activePartIdx]) {
         const p = docParts[activePartIdx];
-        const pageTag = p.pages ? (p.pages.from === p.pages.to ? ` · approx p ${p.pages.from}` : ` · approx pp ${p.pages.from}-${p.pages.to}`) : '';
+        const pageTag = p.pages ? (p.pages.from === p.pages.to ? ` · p ${p.pages.from}` : ` · pp ${p.pages.from}-${p.pages.to}`) : '';
         info.textContent = `Showing part ${activePartIdx + 1} of ${docParts.length}${pageTag} (${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars)`;
       } else {
-        info.textContent = 'Tap a number to load that part into the text area.';
+        const hasPages = docParts.some(p => p.pages);
+        info.textContent = hasPages ? 'Tap a page range to load that part.' : 'Tap a number to load that part.';
       }
       if (typeof updateRangeHint === 'function') updateRangeHint();
     }
@@ -481,20 +531,21 @@
     }
 
     $('split').addEventListener('click', () => {
-      const text = textEl.value.trim();
-      if (!text) { setStatus('Nothing to split.'); return; }
-      const segments = splitTextIntoParts(text, PART_SIZE);
+      const text = textEl.value;
+      const trimmed = text.trim();
+      if (!trimmed) { setStatus('Nothing to split.'); return; }
+      const segments = splitTextIntoPartsWithOffsets(text, PART_SIZE);
       if (segments.length < 2) {
-        setStatus(`Text fits in one part (${text.length.toLocaleString()} chars; ${PART_SIZE.toLocaleString()} max).`);
+        setStatus(`Text fits in one part (${trimmed.length.toLocaleString()} chars; ${PART_SIZE.toLocaleString()} max).`);
         return;
       }
-      const totalChars = segments.reduce((a, s) => a + s.length, 0);
-      let cum = 0;
-      docParts = segments.map(t => {
-        const start = cum; cum += t.length;
-        const part = { text: t, chars: t.length, words: wordCount(t) };
-        const pr = partPageRange(start, cum, totalChars, docTotalPages);
-        if (pr) part.pages = pr;
+      const pageMapIsValid = docPageMap && text === docOriginalText;
+      docParts = segments.map(seg => {
+        const part = { text: seg.text, chars: seg.text.length, words: wordCount(seg.text) };
+        if (pageMapIsValid) {
+          const pr = pageRangeFromMap(seg.start, seg.end, docPageMap);
+          if (pr) part.pages = pr;
+        }
         return part;
       });
       activePartIdx = 0;
@@ -502,7 +553,8 @@
       updateTextStats();
       persistParts();
       renderParts();
-      setStatus(`Split into ${docParts.length} parts. Loaded part 1.`);
+      const accurate = docParts.some(p => p.pages);
+      setStatus(`Split into ${docParts.length} parts${accurate ? ' with exact page ranges' : ''}. Loaded part 1.`);
     });
 
     let genAllAbort = null;
@@ -585,7 +637,7 @@
         `Rate: ${(parseFloat(speedEl.value)).toFixed(1)}x`,
         `Range: ${rangeInputEl.value.trim() || 'all'}`,
         `Parts: ${selected[0]}-${selected[selected.length - 1]} of ${docParts.length} (${selected.length} selected)`,
-        docTotalPages ? `Source pages: ${docTotalPages} (filenames use approximate page ranges)` : '',
+        docTotalPages ? `Source pages: ${docTotalPages}${docParts.some(p => p.pages) ? ' (filenames use exact page ranges)' : ''}` : '',
         ``,
       ].filter(Boolean);
       let completed = 0;
@@ -815,7 +867,21 @@
       }
       showProgress('Deduplicating headers/footers…', 100);
       const deduped = dedupPageLines(pageLines);
-      return { text: deduped.map(lines => lines.join('\n')).join('\n\n'), pageCount: total };
+
+      // Apply cleanup + reflow PER PAGE so page boundary offsets stay accurate
+      const pageMap = [];
+      let text = '';
+      for (let i = 0; i < deduped.length; i++) {
+        const rawPageText = deduped[i].join('\n').trim();
+        if (!rawPageText) continue;
+        const cleaned = reflowText(cleanupText(rawPageText)).trim();
+        if (!cleaned) continue;
+        if (text) text += '\n\n';
+        const start = text.length;
+        text += cleaned;
+        pageMap.push({ page: i + 1, start, end: text.length });
+      }
+      return { text, pageCount: total, pageMap, isPreCleaned: true };
     }
 
     async function extractPageLines(page) {
