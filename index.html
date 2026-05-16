@@ -523,48 +523,27 @@
       const label = $('partsLabel');
       const info = $('partActiveInfo');
       btns.innerHTML = '';
+      btns.hidden = true;
       if (!docParts.length) {
         panel.hidden = true;
         info.textContent = '';
+        if (typeof updateRangeHint === 'function') updateRangeHint();
         return;
       }
       panel.hidden = false;
       const totalChars = docParts.reduce((a, p) => a + p.text.length, 0);
       const totalWords = docParts.reduce((a, p) => a + p.words, 0);
-      label.textContent = `${docParts.length} parts · ${totalWords.toLocaleString()} words · ${totalChars.toLocaleString()} chars`;
-      for (let i = 0; i < docParts.length; i++) {
-        const p = docParts[i];
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn ' + (i === activePartIdx ? '' : 'secondary');
-        btn.style.padding = '8px 10px';
-        btn.style.fontSize = '14px';
-        btn.style.flex = '0 0 auto';
-        if (p.pages) {
-          const suffix = p.subTotal ? String.fromCharCode(97 + p.subIndex) : '';
-          const pageLabel = p.pages.from === p.pages.to
-            ? `${p.pages.from}${suffix}`
-            : `${p.pages.from}–${p.pages.to}${suffix}`;
-          btn.textContent = pageLabel;
-          btn.style.minWidth = '64px';
-          const subTag = p.subTotal ? ` (segment ${p.subIndex + 1}/${p.subTotal})` : '';
-          btn.title = `Part ${i + 1}/${docParts.length} · pp ${p.pages.from}-${p.pages.to}${subTag} · ${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars`;
-        } else {
-          btn.textContent = String(i + 1);
-          btn.style.minWidth = '46px';
-          btn.title = `Part ${i + 1}/${docParts.length} · ${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars`;
-        }
-        btn.addEventListener('click', () => loadPart(i));
-        btns.appendChild(btn);
+      const hasPages = partsHavePages();
+      let pageRange = null;
+      if (hasPages) {
+        const firsts = docParts.map(p => p.pages && p.pages.from).filter(Boolean);
+        const lasts = docParts.map(p => p.pages && p.pages.to).filter(Boolean);
+        if (firsts.length) pageRange = { from: Math.min(...firsts), to: Math.max(...lasts) };
       }
-      if (activePartIdx >= 0 && docParts[activePartIdx]) {
-        const p = docParts[activePartIdx];
-        const pageTag = p.pages ? (p.pages.from === p.pages.to ? ` · p ${p.pages.from}` : ` · pp ${p.pages.from}-${p.pages.to}`) : '';
-        info.textContent = `Showing part ${activePartIdx + 1} of ${docParts.length}${pageTag} (${p.words.toLocaleString()} words · ${p.text.length.toLocaleString()} chars)`;
-      } else {
-        const hasPages = docParts.some(p => p.pages);
-        info.textContent = hasPages ? 'Tap a page range to load that part.' : 'Tap a number to load that part.';
-      }
+      label.textContent = `${docParts.length} parts · ${totalWords.toLocaleString()} words · ${totalChars.toLocaleString()} chars${docTotalPages ? ` · ${docTotalPages} pages` : ''}`;
+      info.textContent = pageRange
+        ? `✅ Document split into ${docParts.length} parts spanning pages ${pageRange.from}–${pageRange.to}. Use the range below (empty = all) and tap Generate ⚡ (ZIP).`
+        : `✅ Document split into ${docParts.length} parts. Use the range below (empty = all) and tap Generate ⚡ (ZIP).`;
       if (typeof updateRangeHint === 'function') updateRangeHint();
     }
 
@@ -606,13 +585,11 @@
         }
         return part;
       });
-      activePartIdx = 0;
-      textEl.value = docParts[0].text;
-      updateTextStats();
+      activePartIdx = -1;
       persistParts();
       renderParts();
       const accurate = docParts.some(p => p.pages);
-      setStatus(`Split into ${docParts.length} parts${accurate ? ' with exact page ranges' : ''}. Loaded part 1.`);
+      setStatus(`✅ Split into ${docParts.length} parts${accurate ? ' with exact page ranges' : ''}. Define a range below or generate all.`);
     });
 
     let genAllAbort = null;
