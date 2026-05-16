@@ -168,6 +168,25 @@
       color: var(--muted);
       margin-top: 5px;
     }
+    #pbarWrap:not([hidden]) {
+      position: fixed;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      max-width: 696px;
+      margin: 0 auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      z-index: 1000;
+    }
+    @media (prefers-color-scheme: light) {
+      #pbarWrap:not([hidden]) {
+        box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      }
+    }
     @media (max-width: 500px) {
       main { padding: 10px; }
       h1 { font-size: 20px; }
@@ -753,9 +772,11 @@
           const partNum = selected[pos];
           const idx = partNum - 1;
           const p = docParts[idx];
-          const padded = String(partNum).padStart(padding, '0');
-          const totalNum = String(docParts.length);
-          showProgress(`Part ${partNum} (${pos + 1}/${selected.length})…`, (pos / selected.length) * 100);
+          const estBytes = Math.max(8000, p.text.length * 500);
+          const partLabel = p.pages
+            ? (p.pages.from === p.pages.to ? `p ${p.pages.from}` : `pp ${p.pages.from}-${p.pages.to}`)
+            : `part ${partNum}`;
+          showProgress(`${partLabel} · ${pos + 1}/${selected.length} · connecting…`, (pos / selected.length) * 100);
           const r = await fetch('/api/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -768,7 +789,19 @@
             try { msg = JSON.parse(errText).error || errText; } catch {}
             throw new Error(`Part ${partNum}: ${msg || r.status}`);
           }
-          const blob = await r.blob();
+          const reader = r.body.getReader();
+          const chunks = [];
+          let received = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.length;
+            const partFrac = Math.min(0.99, received / estBytes);
+            const overallPct = ((pos + partFrac) / selected.length) * 100;
+            showProgress(`${partLabel} · ${pos + 1}/${selected.length} · ${(received / 1024).toFixed(0)} KB`, overallPct);
+          }
+          const blob = new Blob(chunks, { type: 'audio/mpeg' });
           const filename = partFilename(partNum, p);
           const pageTag = p.pages ? ` (${p.pages.from === p.pages.to ? 'p ' + p.pages.from : 'pp ' + p.pages.from + '-' + p.pages.to})` : '';
           zip.file(filename, blob);
