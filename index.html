@@ -473,22 +473,6 @@
       return parts.map(p => ({ start: p.start, end: p.end, text: text.slice(p.start, p.end).trim() }));
     }
 
-    function splitTextIntoParts(text, maxLen) {
-      const sentences = text.replace(/\s+/g, ' ').split(/(?<=[.!?…])\s+/).map(s => s.trim()).filter(Boolean);
-      const out = [];
-      let buf = '';
-      for (const s of sentences) {
-        if ((buf + ' ' + s).trim().length > maxLen && buf) {
-          out.push(buf.trim());
-          buf = s;
-        } else {
-          buf = (buf + ' ' + s).trim();
-        }
-      }
-      if (buf) out.push(buf.trim());
-      return out;
-    }
-
     function persistParts() {
       try {
         localStorage.setItem(PARTS_STORAGE_KEY, JSON.stringify({ parts: docParts, activePartIdx, totalPages: docTotalPages }));
@@ -718,9 +702,15 @@
         return;
       }
       const voice = hqVoiceEl.value;
-      if (!voice) { setStatus('Pick an HQ voice first.'); return; }
+      if (!voice || voice === 'Server unavailable') { setStatus('Voice picker is empty — refresh the page and try again.'); return; }
       const selected = parseRange(rangeInputEl.value, docParts.length);
-      if (!selected || !selected.length) { setStatus('No valid parts selected.'); return; }
+      console.log('[batch generate] range input:', JSON.stringify(rangeInputEl.value), '→ selected parts:', selected, '| pages mode:', partsHavePages());
+      if (selected === null) { setStatus(`❌ Range "${rangeInputEl.value}" is invalid — fix and try again.`); return; }
+      if (!selected.length) {
+        const mode = partsHavePages() ? 'pages' : 'parts';
+        setStatus(`❌ No parts match "${rangeInputEl.value}" (${mode}-based). Clear the range field to generate all.`);
+        return;
+      }
 
       const ratePct = Math.round((parseFloat(speedEl.value) - 1) * 100);
       genAllAbort = new AbortController();
@@ -1337,6 +1327,9 @@
       }
       const text = textEl.value.trim();
       if (!text) { setStatus('Nothing to generate.'); return; }
+      if (docParts.length > 1 && rangeInputEl && rangeInputEl.value.trim()) {
+        setStatus('ℹ️ This button generates from the text area. To use the page range, scroll up to "Generate ⚡ (ZIP)".');
+      }
       const ratePct = Math.round((parseFloat(speedEl.value) - 1) * 100);
       const estimated = Math.max(8000, text.length * 500);
 
