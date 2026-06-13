@@ -385,10 +385,12 @@
         if (singlePrecleanedPdf) {
           docTotalPages = pdfPageCount;
           docPageMap = lastResult.pageMap;
+          docChapterMap = lastResult.chapterMap || null;
           docOriginalText = textEl.value;
         } else {
           docTotalPages = (files.length === 1 && pdfCount === 1) ? pdfPageCount : 0;
           docPageMap = null;
+          docChapterMap = null;
           docOriginalText = '';
         }
         const removed = totalRaw - final.length;
@@ -411,6 +413,7 @@
     let activePartIdx = -1;
     let docTotalPages = 0;
     let docPageMap = null;
+    let docChapterMap = null;
     let docOriginalText = '';
 
     function pageRangeFromMap(startOffset, endOffset, pageMap) {
@@ -572,12 +575,17 @@
       const partsSource = usePageAligned
         ? splitByPageBoundaries(text, docPageMap, PART_SIZE)
         : segments;
+      const chapMapValid = pageMapIsValid && docChapterMap && docChapterMap.length > 0;
       docParts = partsSource.map(seg => {
         const part = { text: seg.text, chars: seg.text.length, words: wordCount(seg.text) };
         if (seg.pages) part.pages = seg.pages;
         else if (pageMapIsValid) {
           const pr = pageRangeFromMap(seg.start, seg.end, docPageMap);
           if (pr) part.pages = pr;
+        }
+        if (part.pages && chapMapValid) {
+          const ch = chapterLabelForPage(part.pages.from, docChapterMap);
+          if (ch) part.chapter = ch;
         }
         if (seg.subIndex !== undefined) {
           part.subIndex = seg.subIndex;
@@ -589,7 +597,8 @@
       persistParts();
       renderParts();
       const accurate = docParts.some(p => p.pages);
-      setStatus(`✅ Split into ${docParts.length} parts${accurate ? ' with exact page ranges' : ''}. Define a range below or generate all.`);
+      const chaptered = docParts.some(p => p.chapter);
+      setStatus(`✅ Split into ${docParts.length} parts${accurate ? ' with exact page ranges' : ''}${chaptered ? ' and chapter names' : ''}. Define a range below or generate all.`);
     });
 
     let genAllAbort = null;
@@ -723,9 +732,11 @@
           const f = String(part.pages.from).padStart(pagePadding, '0');
           const t = String(part.pages.to).padStart(pagePadding, '0');
           const suffix = part.subTotal ? `-${String.fromCharCode(97 + part.subIndex)}` : '';
-          return part.pages.from === part.pages.to
-            ? `pp-${f}${suffix}.mp3`
-            : `pp-${f}-${t}${suffix}.mp3`;
+          const pp = part.pages.from === part.pages.to ? `pp ${f}` : `pp ${f}-${t}`;
+          if (part.chapter) {
+            return `${part.chapter} - ${pp}${suffix}.mp3`;
+          }
+          return `${pp}${suffix}.mp3`;
         }
         return `${String(partNum).padStart(padding, '0')}-of-${docParts.length}.mp3`;
       }
@@ -1003,7 +1014,59 @@
         text += cleaned;
         pageMap.push({ page: i + 1, start, end: text.length });
       }
-      return { text, pageCount: total, pageMap, isPreCleaned: true };
+
+      const chapterMap = await buildChapterMap(doc);
+      return { text, pageCount: total, pageMap, chapterMap, isPreCleaned: true };
+    }
+
+    const CHAPTER_NUM_WORDS = { one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20,'twenty-one':21,'twenty-two':22,'twenty-three':23,'twenty-four':24,'twenty-five':25 };
+
+    function sanitizeChapterLabel(s, max = 50) {
+      return s.replace(/[^A-Za-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max).trim();
+    }
+
+    function chapterLabelFromTitle(title) {
+      let m = title.match(/^CHAPTER\s+([A-Za-z-]+)\s+(.*)/i);
+      if (m) {
+        const num = CHAPTER_NUM_WORDS[m[1].toLowerCase()];
+        const t = sanitizeChapterLabel(m[2]);
+        return num ? `Ch${String(num).padStart(2, '0')} - ${t}` : sanitizeChapterLabel(m[1] + ' ' + m[2]);
+      }
+      m = title.match(/^PART\s+([IVXLC]+)\s+(.*)/i);
+      if (m) return `Part ${m[1]} - ${sanitizeChapterLabel(m[2])}`;
+      return sanitizeChapterLabel(title);
+    }
+
+    async function buildChapterMap(doc) {
+      let outline;
+      try { outline = await doc.getOutline(); } catch { return []; }
+      if (!outline || !outline.length) return [];
+      const flat = [];
+      async function resolvePage(dest) {
+        try {
+          let e = dest;
+          if (typeof dest === 'string') e = await doc.getDestination(dest);
+          if (!e || !e[0]) return null;
+          return (await doc.getPageIndex(e[0])) + 1;
+        } catch { return null; }
+      }
+      async function walk(items) {
+        for (const it of items) {
+          const pg = await resolvePage(it.dest);
+          if (pg && it.title) flat.push({ page: pg, label: chapterLabelFromTitle(it.title.trim()) });
+          if (it.items && it.items.length) await walk(it.items);
+        }
+      }
+      await walk(outline);
+      flat.sort((a, b) => a.page - b.page);
+      return flat;
+    }
+
+    function chapterLabelForPage(page, chapterMap) {
+      if (!chapterMap || !chapterMap.length) return null;
+      let best = null;
+      for (const c of chapterMap) { if (c.page <= page) best = c; else break; }
+      return best ? best.label : null;
     }
 
     async function extractPageLines(page) {
