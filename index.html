@@ -1022,21 +1022,27 @@
 
     function dedupPageLines(pageLines) {
       if (pageLines.length < 3) return pageLines;
+      const dedupKey = (line) => line.replace(/\d+/g, 'N').replace(/\s+/g, ' ').trim();
       const counts = new Map();
+      const keyToLines = new Map();
       for (const lines of pageLines) {
         const seen = new Set();
         for (const line of lines) {
-          if (line.length > 120 || seen.has(line)) continue;
-          seen.add(line);
-          counts.set(line, (counts.get(line) || 0) + 1);
+          if (line.length > 120) continue;
+          const key = dedupKey(line);
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          counts.set(key, (counts.get(key) || 0) + 1);
+          if (!keyToLines.has(key)) keyToLines.set(key, new Set());
+          keyToLines.get(key).add(line);
         }
       }
-      const threshold = Math.ceil(pageLines.length * 0.5);
-      const drop = new Set();
-      for (const [line, n] of counts) {
-        if (n >= threshold) drop.add(line);
+      const threshold = Math.max(3, Math.ceil(pageLines.length * 0.3));
+      const dropLines = new Set();
+      for (const [key, n] of counts) {
+        if (n >= threshold) for (const orig of keyToLines.get(key)) dropLines.add(orig);
       }
-      return pageLines.map(lines => lines.filter(l => !drop.has(l)));
+      return pageLines.map(lines => lines.filter(l => !dropLines.has(l)));
     }
 
     function reflowText(text) {
@@ -1065,6 +1071,7 @@
         /\bDOI[\s:]+10\.\d+\/\S+/gi,
         /\bhttps?:\/\/(?:doi\.org|dx\.doi\.org)\/\S+/gi,
         /^\s*Page\s+\d+\s+of\s+\d+\s*$/gim,
+        /(?:\b\d+\s+)?[A-Z](?:\s+[A-Z]{1,2}){4,}/g,
         /^\s*\d+\s*$/gm,
       ];
       let cleaned = text;
