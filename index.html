@@ -269,14 +269,35 @@
       transform: scale(0.9);
       transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
     }
-    .track.centered {
+    #trackList:not(.as-list) .track.centered {
       border-color: var(--accent);
       background: rgba(79,140,255,0.12);
       opacity: 1;
       transform: scale(1);
     }
-    .track.playing:not(.centered) { opacity: 0.55; }
+    #trackList:not(.as-list) .track.playing:not(.centered) { opacity: 0.55; }
     .track.playing .tname { color: var(--accent); }
+    /* List view: a plain scrollable list — easier to use with a mouse. */
+    #trackList.as-list {
+      height: auto;
+      max-height: 360px;
+      padding: 6px 4px;
+      scroll-snap-type: none;
+      scrollbar-width: thin;
+      -webkit-mask-image: none;
+      mask-image: none;
+    }
+    #trackList.as-list::-webkit-scrollbar { display: initial; width: 8px; }
+    #trackList.as-list .track {
+      opacity: 1;
+      transform: none;
+      scroll-snap-align: none;
+    }
+    #trackList.as-list .track.playing {
+      border-color: var(--accent);
+      background: rgba(79,140,255,0.12);
+    }
+    #trackList.as-list .track:hover { border-color: var(--accent); }
     .track .tmeta { flex: 1; min-width: 0; }
     .track .tname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .track .tsub { font-size: 12px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -294,6 +315,8 @@
       flex: 0 0 auto;
     }
     .icon-btn:hover { background: var(--border); }
+    /* Destructive actions read red at rest, then fill solid red on hover. */
+    .icon-btn.danger { color: #e74c3c; border-color: rgba(231,76,60,0.55); }
     .icon-btn.danger:hover { background: #c0392b; border-color: #c0392b; color: #fff; }
     #dlgOverlay[hidden] { display: none !important; }
     @media (max-width: 500px) {
@@ -449,6 +472,9 @@
           </div>
         </div>
 
+        <div class="row" style="justify-content:flex-end; margin-bottom:6px;">
+          <button class="icon-btn" id="trackViewToggle" type="button" title="Switch between drum and list view">☰ List view</button>
+        </div>
         <div id="trackList"></div>
 
         <div class="row" style="margin-top:12px; gap:6px;">
@@ -941,6 +967,7 @@
       let completed = 0;
       let lastDonePartNum = 0;
       let aborted = false;
+      const emptyParts = [];
 
       try {
         for (let pos = 0; pos < selected.length; pos++) {
@@ -980,6 +1007,13 @@
           const blob = new Blob(chunks, { type: 'audio/mpeg' });
           const filename = partFilename(partNum, p);
           const pageTag = p.pages ? ` (${p.pages.from === p.pages.to ? 'p ' + p.pages.from : 'pp ' + p.pages.from + '-' + p.pages.to})` : '';
+          // Never bundle a 0-byte part — that silently creates empty MP3s.
+          if (blob.size === 0) {
+            emptyParts.push(partLabel);
+            manifestLines.push(`${filename}  part ${partNum}${pageTag}  *** EMPTY — not included, re-generate ***`);
+            lastDonePartNum = partNum;
+            continue;
+          }
           zip.file(filename, blob);
           manifestLines.push(`${filename}  part ${partNum}${pageTag}  ${p.words.toLocaleString()} words  ${(blob.size / 1024).toFixed(0)} KB`);
           completed++;
@@ -1037,6 +1071,12 @@
         setStatus(`Partial ZIP: ${completed} part${completed === 1 ? '' : 's'}. Range pre-filled to resume from ${what}.`);
       } else {
         setStatus(`ZIP ready: ${completed} part${completed === 1 ? '' : 's'} (${(zipBlob.size / 1024 / 1024).toFixed(1)} MB) downloaded`);
+      }
+
+      if (emptyParts.length) {
+        const list = emptyParts.join(', ');
+        setStatus(`⚠ ${emptyParts.length} part${emptyParts.length === 1 ? '' : 's'} came back empty and ${emptyParts.length === 1 ? 'was' : 'were'} skipped: ${list}. Re-generate ${emptyParts.length === 1 ? 'it' : 'them'}.`);
+        alert(`${emptyParts.length} part${emptyParts.length === 1 ? '' : 's'} produced no audio and ${emptyParts.length === 1 ? 'was' : 'were'} left out of the ZIP:\n\n${list}\n\nRe-generate just these (set the page range and Generate again).`);
       }
     });
 
@@ -1751,6 +1791,10 @@
         return;
       }
       const blob = new Blob(chunks, { type: 'audio/mpeg' });
+      if (blob.size === 0) {
+        setStatus('MP3 generation produced no audio (0 bytes) — nothing to download. Try again or check the text.');
+        return;
+      }
       if (hqLastUrl) URL.revokeObjectURL(hqLastUrl);
       hqLastUrl = URL.createObjectURL(blob);
       hqAudioEl.src = hqLastUrl;
@@ -2017,12 +2061,16 @@
         const eb = getEbook(ebookId);
         let added = 0, replaced = 0, skipped = 0;
         const failed = [];
+        const empty = [];
         let blanket = null;
         const multi = files.length > 1;
         libBusy = true;
         let i = 0;
         for (const f of files) {
           i++;
+          // An empty (0-byte) file has no audio — uploading it just fails on
+          // the server. Skip it up front and tell the user to re-generate.
+          if (!f.size) { empty.push(f.name); continue; }
           let choice = 'add';
           const dupes = byName.get(f.name) || [];
           if (dupes.length) {
@@ -2082,7 +2130,12 @@
         if (added) parts.push(`added ${added}`);
         if (replaced) parts.push(`replaced ${replaced}`);
         if (skipped) parts.push(`skipped ${skipped}`);
+        if (empty.length) parts.push(`skipped ${empty.length} empty`);
         let msg = parts.length ? parts.join(', ') + '.' : 'No changes.';
+        if (empty.length) {
+          msg += `  ⚠ ${empty.length} empty file${empty.length === 1 ? '' : 's'} (0 bytes) skipped — re-generate: ${empty.join(', ')}`;
+          alert(`${empty.length} file${empty.length === 1 ? '' : 's'} ${empty.length === 1 ? 'is' : 'are'} empty (0 bytes) and ${empty.length === 1 ? 'was' : 'were'} skipped. These never generated properly — re-generate the MP3${empty.length === 1 ? '' : 's'} and add again:\n\n${empty.join('\n')}`);
+        }
         if (failed.length) {
           msg += `  ⚠ ${failed.length} failed — re-add: ${failed.join(', ')}`;
           alert(`${failed.length} recording${failed.length === 1 ? '' : 's'} failed to upload (likely a network blip). Please add ${failed.length === 1 ? 'it' : 'them'} again:\n\n${failed.join('\n')}`);
@@ -2196,12 +2249,19 @@
         const list = el('trackList');
         if (!list) return;
         const row = list.querySelector('.track.playing') || list.querySelector('.track.bookmark') || list.querySelector('.track');
+        if (!row) return;
+        // List view: no drum, just make sure the current row is visible.
+        if (list.classList.contains('as-list')) {
+          row.scrollIntoView({ block: 'nearest', behavior: smooth ? 'smooth' : 'auto' });
+          return;
+        }
         centerRow(row, smooth);
       }
       (function initDrum() {
         const list = el('trackList');
         if (!list) return;
         list.addEventListener('scroll', () => {
+          if (list.classList.contains('as-list')) return; // plain list: no snap/dim
           updateCentered();
           if (programmaticScroll) return;
           list.classList.add('rolling');
@@ -2214,6 +2274,28 @@
             snapTimer = setTimeout(() => { list.classList.remove('rolling'); centerRow(nearestRow(), true); }, 500);
           }
         }, { passive: true });
+      })();
+
+      // ---- drum vs. list view toggle (drum is nice on touch, list is easier with a mouse) ----
+      function applyTrackView() {
+        const list = el('trackList');
+        const btn = el('trackViewToggle');
+        if (!list || !btn) return;
+        const asList = localStorage.getItem('readaloud.trackView') === 'list';
+        list.classList.toggle('as-list', asList);
+        btn.textContent = asList ? '🎡 Drum view' : '☰ List view';
+        btn.title = asList ? 'Switch to the rolling drum view' : 'Switch to a plain scrollable list';
+      }
+      (function initTrackViewToggle() {
+        const btn = el('trackViewToggle');
+        if (!btn) return;
+        applyTrackView();
+        btn.addEventListener('click', () => {
+          const next = localStorage.getItem('readaloud.trackView') === 'list' ? 'drum' : 'list';
+          localStorage.setItem('readaloud.trackView', next);
+          applyTrackView();
+          setTimeout(() => centerCurrentTrack(false), 30);
+        });
       })();
 
       async function playTrack(idx, startAt) {
@@ -2316,7 +2398,13 @@
       });
 
       el('clearAllLibrary').addEventListener('click', async () => {
-        if (!confirm('Delete ALL audiobooks and recordings from the cloud library? This cannot be undone.')) return;
+        const nBooks = LIB.ebooks.length, nRecs = LIB.tracks.length;
+        if (!nBooks && !nRecs) { setStatus('Library is already empty.'); return; }
+        const typed = prompt(
+          `This permanently deletes ALL ${nBooks} audiobook${nBooks === 1 ? '' : 's'} and ${nRecs} recording${nRecs === 1 ? '' : 's'} from the cloud library, on every device. This cannot be undone.\n\nType DELETE to confirm:`
+        );
+        if (typed == null) return;            // cancelled
+        if (typed.trim().toUpperCase() !== 'DELETE') { setStatus('Cancelled — nothing deleted.'); return; }
         stopPlayback();
         setStatus('Clearing library…');
         for (const t of LIB.tracks.slice()) await deleteAudio(t.id);
