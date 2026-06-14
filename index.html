@@ -1912,9 +1912,17 @@
                <div class="sub"></div>
                <div class="ebook-bar"><div style="width:${prog.pct}%"></div></div>
              </div>
-             <button class="icon-btn" data-act="open">Open</button>`;
+             <button class="icon-btn" data-act="open">Open</button>
+             <button class="icon-btn danger" data-act="del" title="Delete this audiobook">✕</button>`;
           card.querySelector('.title').textContent = eb.title;
           card.querySelector('.sub').textContent = `${prog.label} · ${prog.pct}%`;
+          card.querySelector('[data-act="open"]').addEventListener('click', (ev) => { ev.stopPropagation(); openEbook(eb.id); });
+          card.querySelector('[data-act="del"]').addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            if (!confirm(`Delete the audiobook "${eb.title}" and all ${tracks.length} recording${tracks.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+            await deleteEbookById(eb.id);
+            await renderEbookList();
+          });
           card.addEventListener('click', () => openEbook(eb.id));
           list.appendChild(card);
         }
@@ -2165,20 +2173,24 @@
         await renderEbookList();
       });
 
+      async function deleteEbookById(id) {
+        if (id === currentEbookId) stopPlayback();
+        setStatus('Deleting…');
+        for (const t of tracksForEbook(id)) { delTrackMem(t.id); await deleteAudio(t.id); }
+        delEbookMem(id);
+        try { await saveLib(); } catch {}
+        if (id === currentEbookId) { currentEbookId = null; currentTrackIdx = -1; }
+        setStatus('Deleted.');
+      }
+
       el('ebookDelete').addEventListener('click', async () => {
         const eb = getEbook(currentEbookId);
         if (!eb) return;
         if (!confirm(`Delete the entire audiobook "${eb.title}" and all its recordings? This cannot be undone.`)) return;
-        stopPlayback();
-        setStatus('Deleting…');
-        for (const t of currentTracks) { delTrackMem(t.id); await deleteAudio(t.id); }
-        delEbookMem(currentEbookId);
-        try { await saveLib(); } catch {}
-        currentEbookId = null; currentTrackIdx = -1;
+        await deleteEbookById(currentEbookId);
         el('ebookDetailView').hidden = true;
         el('libraryListView').hidden = false;
         await renderEbookList();
-        setStatus('Deleted.');
       });
 
       el('clearAllLibrary').addEventListener('click', async () => {
