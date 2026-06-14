@@ -2139,6 +2139,13 @@
 
       audio.addEventListener('timeupdate', () => saveBookmark(false));
       audio.addEventListener('pause', () => saveBookmark(true));
+      audio.addEventListener('error', async () => {
+        if (currentTrackIdx < 0 || !currentTracks[currentTrackIdx]) return;
+        const t = currentTracks[currentTrackIdx];
+        let info = '';
+        try { const r = await fetch(audioUrl(t.id), { headers: { Range: 'bytes=0-1' } }); info = ` (HTTP ${r.status})`; } catch {}
+        setStatus(`Couldn't play "${t.label || t.filename}"${info}. It may need re-uploading.`);
+      });
       audio.addEventListener('ended', async () => {
         if (currentTrackIdx < currentTracks.length - 1) {
           playTrack(currentTrackIdx + 1, 0);

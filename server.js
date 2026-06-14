@@ -199,11 +199,12 @@ app.post('/api/lib', checkPass, async (req, res) => {
   }
 });
 
-// Upload an MP3 (raw body). Client sends the blob with Content-Type audio/mpeg.
-app.post('/api/lib/audio/:id', checkPass, express.raw({ type: ['audio/mpeg', 'application/octet-stream'], limit: '80mb' }), async (req, res) => {
+// Upload an MP3 (raw body). Accept any content type so an unexpected
+// Content-Type can never cause a silent "empty upload" rejection.
+app.post('/api/lib/audio/:id', checkPass, express.raw({ type: () => true, limit: '80mb' }), async (req, res) => {
   try {
     const id = req.params.id;
-    if (!SAFE_ID.test(id)) return res.status(400).json({ error: 'Bad id.' });
+    if (!SAFE_ID.test(id)) { console.warn('[lib] upload bad id', JSON.stringify(id)); return res.status(400).json({ error: 'Bad id.' }); }
     if (!req.body || !req.body.length) return res.status(400).json({ error: 'Empty upload.' });
     await ensureLibDirs();
     const file = path.join(AUDIO_DIR, id + '.mp3');
@@ -233,7 +234,7 @@ app.delete('/api/lib/audio/:id', checkPass, async (req, res) => {
 app.get('/api/lib/audio/:id', checkPass, async (req, res) => {
   try {
     const id = req.params.id;
-    if (!SAFE_ID.test(id)) return res.status(400).json({ error: 'Bad id.' });
+    if (!SAFE_ID.test(id)) { console.warn('[lib] stream bad id', JSON.stringify(id)); return res.status(400).json({ error: 'Bad id.' }); }
     const file = path.join(AUDIO_DIR, id + '.mp3');
     let stat;
     try { stat = await fsp.stat(file); }
