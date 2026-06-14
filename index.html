@@ -433,6 +433,16 @@
       </section>
 
     </div><!-- /libraryView -->
+
+    <div id="dlgOverlay" hidden style="position:fixed; inset:0; background:rgba(0,0,0,0.55); display:flex; align-items:center; justify-content:center; z-index:2000; padding:16px;">
+      <div class="panel" style="max-width:380px; width:100%; margin:0;">
+        <div id="dlgMsg" style="margin-bottom:12px; font-size:15px; word-break:break-word;"></div>
+        <label id="dlgAllWrap" class="small" style="display:flex; gap:8px; align-items:center; margin-bottom:14px;">
+          <input type="checkbox" id="dlgAll"> Apply to all remaining duplicates
+        </label>
+        <div class="row" id="dlgButtons" style="gap:6px;"></div>
+      </div>
+    </div>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
@@ -1890,26 +1900,90 @@
         await openEbook(id);
       }
 
+      function showChoice(message, buttons, showAll) {
+        return new Promise((resolve) => {
+          const overlay = el('dlgOverlay');
+          el('dlgMsg').textContent = message;
+          el('dlgAllWrap').style.display = showAll ? 'flex' : 'none';
+          el('dlgAll').checked = false;
+          const bc = el('dlgButtons');
+          bc.innerHTML = '';
+          for (const b of buttons) {
+            const btn = document.createElement('button');
+            btn.className = b.danger ? 'icon-btn danger' : (b.primary ? 'btn' : 'btn secondary');
+            btn.style.flex = '1';
+            btn.textContent = b.label;
+            btn.addEventListener('click', () => {
+              overlay.hidden = true;
+              resolve({ value: b.value, all: el('dlgAll').checked });
+            });
+            bc.appendChild(btn);
+          }
+          overlay.hidden = false;
+        });
+      }
+
       async function addFilesToEbook(ebookId, files) {
         const existing = await tracksForEbook(ebookId);
-        const seen = new Set(existing.map(t => t.filename));
-        let added = 0, skipped = 0;
+        const byName = new Map();
+        for (const t of existing) {
+          if (!byName.has(t.filename)) byName.set(t.filename, []);
+          byName.get(t.filename).push(t);
+        }
+        const eb = await dbGet('ebooks', ebookId);
+        let added = 0, replaced = 0, skipped = 0;
+        let blanket = null;
+        const multi = files.length > 1;
         for (const f of files) {
-          if (seen.has(f.name)) {
-            if (!confirm(`"${f.name}" is already in this book. Add it again anyway?`)) { skipped++; continue; }
+          let choice = 'add';
+          const dupes = byName.get(f.name) || [];
+          if (dupes.length) {
+            if (blanket) {
+              choice = blanket;
+            } else {
+              const res = await showChoice(
+                `"${f.name}" is already in this book.`,
+                [
+                  { label: 'Skip', value: 'skip' },
+                  { label: 'Replace', value: 'replace', danger: true },
+                  { label: 'Add again', value: 'add', primary: true },
+                ],
+                multi
+              );
+              choice = res.value;
+              if (res.all) blanket = choice;
+            }
+          }
+          if (choice === 'skip') { skipped++; continue; }
+          let replacedBookmark = false;
+          if (choice === 'replace') {
+            for (const old of dupes) {
+              await dbDelete('tracks', old.id);
+              if (eb && eb.lastTrackId === old.id) replacedBookmark = true;
+            }
+            byName.set(f.name, []);
+            replaced++;
           }
           const meta = parseTrackName(f.name);
           const blob = new Blob([await f.arrayBuffer()], { type: f.type || 'audio/mpeg' });
-          await dbPut('tracks', {
+          const rec = {
             id: uid(), ebookId, filename: f.name, blob,
             fromPage: meta.fromPage, toPage: meta.toPage, chapter: meta.chapter,
             label: meta.label, sizeBytes: blob.size, addedAt: Date.now(),
-          });
-          seen.add(f.name); added++;
+          };
+          await dbPut('tracks', rec);
+          // If we replaced the bookmarked track, keep the resume point on the new copy.
+          if (replacedBookmark) eb.lastTrackId = rec.id;
+          if (!byName.has(f.name)) byName.set(f.name, []);
+          byName.get(f.name).push(rec);
+          if (choice !== 'replace') added++;
         }
-        const eb = await dbGet('ebooks', ebookId);
         if (eb) { eb.updatedAt = Date.now(); await dbPut('ebooks', eb); }
-        setStatus(`Added ${added} recording${added === 1 ? '' : 's'}${skipped ? `, skipped ${skipped}` : ''}.`);
+        const parts = [];
+        if (added) parts.push(`added ${added}`);
+        if (replaced) parts.push(`replaced ${replaced}`);
+        if (skipped) parts.push(`skipped ${skipped}`);
+        setStatus(parts.length ? parts.join(', ') + '.' : 'No changes.');
       }
 
       el('newEbookFile').addEventListener('change', async (e) => {
