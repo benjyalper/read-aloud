@@ -1738,50 +1738,61 @@
 
     /* ============================ LIBRARY (audio ebooks) ============================ */
     (function library() {
-      const DB_NAME = 'readaloud-library';
-      const DB_VERSION = 1;
-      let db = null;
+      /* ---- server-backed storage (Railway volume via /api/lib) ---- */
+      const LIB = { ebooks: [], tracks: [] };
+      let loaded = false;
+      let pass = localStorage.getItem('readaloud.pass') || '';
 
-      function openDB() {
-        return new Promise((resolve, reject) => {
-          const req = indexedDB.open(DB_NAME, DB_VERSION);
-          req.onupgradeneeded = (e) => {
-            const d = e.target.result;
-            if (!d.objectStoreNames.contains('ebooks')) {
-              d.createObjectStore('ebooks', { keyPath: 'id' });
-            }
-            if (!d.objectStoreNames.contains('tracks')) {
-              const ts = d.createObjectStore('tracks', { keyPath: 'id' });
-              ts.createIndex('ebookId', 'ebookId', { unique: false });
-            }
-          };
-          req.onsuccess = () => resolve(req.result);
-          req.onerror = () => reject(req.error);
+      const apiHeaders = (extra) => Object.assign({ 'x-app-pass': pass }, extra || {});
+
+      async function libPing() {
+        try {
+          const r = await fetch('/api/lib/ping', { headers: apiHeaders() });
+          if (r.status === 503) return { enabled: false };
+          return await r.json();
+        } catch { return { enabled: false, error: true }; }
+      }
+      async function loadLib() {
+        const r = await fetch('/api/lib', { headers: apiHeaders() });
+        if (!r.ok) throw new Error(r.status === 401 ? 'unauthorized' : ('load failed ' + r.status));
+        const data = await r.json();
+        LIB.ebooks = Array.isArray(data.ebooks) ? data.ebooks : [];
+        LIB.tracks = Array.isArray(data.tracks) ? data.tracks : [];
+        loaded = true;
+      }
+      async function saveLib() {
+        const r = await fetch('/api/lib', {
+          method: 'POST',
+          headers: apiHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ ebooks: LIB.ebooks, tracks: LIB.tracks }),
         });
+        if (!r.ok) throw new Error('save failed ' + r.status);
       }
-      function tx(stores, mode) {
-        const t = db.transaction(stores, mode);
-        return t;
+      async function uploadAudio(id, fileOrBlob) {
+        const r = await fetch('/api/lib/audio/' + id, {
+          method: 'POST',
+          headers: apiHeaders({ 'Content-Type': 'audio/mpeg' }),
+          body: fileOrBlob,
+        });
+        if (!r.ok) throw new Error('upload failed ' + r.status);
       }
-      function reqP(r) { return new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+      async function deleteAudio(id) {
+        try { await fetch('/api/lib/audio/' + id, { method: 'DELETE', headers: apiHeaders() }); } catch {}
+      }
+      const audioUrl = (id) => '/api/lib/audio/' + id + '?p=' + encodeURIComponent(pass);
+      async function fetchAudioBlob(id) {
+        const r = await fetch(audioUrl(id));
+        if (!r.ok) throw new Error('audio fetch failed ' + r.status);
+        return r.blob();
+      }
 
-      async function dbGetAll(store) {
-        return reqP(tx([store], 'readonly').objectStore(store).getAll());
-      }
-      async function dbPut(store, val) {
-        return reqP(tx([store], 'readwrite').objectStore(store).put(val));
-      }
-      async function dbGet(store, key) {
-        return reqP(tx([store], 'readonly').objectStore(store).get(key));
-      }
-      async function dbDelete(store, key) {
-        return reqP(tx([store], 'readwrite').objectStore(store).delete(key));
-      }
-      async function tracksForEbook(ebookId) {
-        const idx = tx(['tracks'], 'readonly').objectStore('tracks').index('ebookId');
-        const all = await reqP(idx.getAll(ebookId));
-        return all.sort(trackSort);
-      }
+      // in-memory helpers over LIB
+      const getEbook = (id) => LIB.ebooks.find(e => e.id === id);
+      function putEbook(eb) { const i = LIB.ebooks.findIndex(e => e.id === eb.id); if (i >= 0) LIB.ebooks[i] = eb; else LIB.ebooks.push(eb); }
+      function delEbookMem(id) { LIB.ebooks = LIB.ebooks.filter(e => e.id !== id); }
+      function tracksForEbook(id) { return LIB.tracks.filter(t => t.ebookId === id).sort(trackSort); }
+      function putTrack(t) { const i = LIB.tracks.findIndex(x => x.id === t.id); if (i >= 0) LIB.tracks[i] = t; else LIB.tracks.push(t); }
+      function delTrackMem(id) { LIB.tracks = LIB.tracks.filter(t => t.id !== id); }
 
       const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
@@ -1814,8 +1825,6 @@
       let currentEbookId = null;
       let currentTracks = [];
       let currentTrackIdx = -1;
-      let currentUrl = null;
-      let saveTimer = 0;
 
       const el = (id) => document.getElementById(id);
       const audio = el('ebookAudio');
@@ -1827,27 +1836,49 @@
         el('tabReader').classList.add('active');
         el('tabLibrary').classList.remove('active');
       }
+      async function ensureAuth() {
+        const ping = await libPing();
+        if (!ping.enabled) {
+          el('ebookList').innerHTML = '';
+          el('emptyLibrary').hidden = false;
+          el('storageMeter').textContent = ping.error
+            ? 'Could not reach the server.'
+            : 'Cloud library isn’t set up yet (server is missing APP_PASSPHRASE).';
+          return false;
+        }
+        if (ping.authed) return true;
+        const entered = (prompt('Enter the library passphrase:') || '').trim();
+        if (!entered) return false;
+        pass = entered;
+        const again = await libPing();
+        if (again.authed) { localStorage.setItem('readaloud.pass', pass); return true; }
+        pass = ''; localStorage.removeItem('readaloud.pass');
+        setStatus('Wrong passphrase.');
+        return false;
+      }
+
       async function showLibrary() {
         el('readerView').hidden = true;
         el('libraryView').hidden = false;
         el('tabReader').classList.remove('active');
         el('tabLibrary').classList.add('active');
-        if (!db) { db = await openDB(); requestPersist(); }
+        const ok = await ensureAuth();
+        if (!ok) return;
+        try {
+          if (!loaded) await loadLib();
+        } catch (err) {
+          setStatus('Could not load library: ' + (err.message || err));
+          return;
+        }
         await renderEbookList();
       }
       el('tabReader').addEventListener('click', () => { stopPlayback(); showReader(); });
       el('tabLibrary').addEventListener('click', showLibrary);
 
-      async function requestPersist() {
-        try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch {}
-      }
-      async function updateStorageMeter() {
-        try {
-          const est = await navigator.storage.estimate();
-          const used = (est.usage / 1024 / 1024).toFixed(0);
-          const quota = (est.quota / 1024 / 1024).toFixed(0);
-          el('storageMeter').textContent = `Storage used: ${used} MB of ~${quota} MB available (on this device).`;
-        } catch { el('storageMeter').textContent = ''; }
+      function updateStorageMeter() {
+        const bytes = LIB.tracks.reduce((a, t) => a + (t.sizeBytes || 0), 0);
+        el('storageMeter').textContent =
+          `${LIB.ebooks.length} book${LIB.ebooks.length === 1 ? '' : 's'}, ${LIB.tracks.length} recording${LIB.tracks.length === 1 ? '' : 's'} · ${(bytes / 1024 / 1024).toFixed(1)} MB stored on the server (synced across your devices).`;
       }
 
       /* ---- library list ---- */
@@ -1866,12 +1897,12 @@
       }
 
       async function renderEbookList() {
-        const ebooks = (await dbGetAll('ebooks')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        const ebooks = LIB.ebooks.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
         const list = el('ebookList');
         list.innerHTML = '';
         el('emptyLibrary').hidden = ebooks.length > 0;
         for (const eb of ebooks) {
-          const tracks = await tracksForEbook(eb.id);
+          const tracks = tracksForEbook(eb.id);
           const prog = await ebookProgress(eb, tracks);
           const card = document.createElement('div');
           card.className = 'ebook-card';
@@ -1896,7 +1927,7 @@
         if (!title) { setStatus('Cancelled — audiobook needs a name.'); return; }
         const id = uid();
         const now = Date.now();
-        await dbPut('ebooks', { id, title, createdAt: now, updatedAt: now, lastTrackId: null, lastPosition: 0, complete: false });
+        putEbook({ id, title, createdAt: now, updatedAt: now, lastTrackId: null, lastPosition: 0, complete: false });
         await addFilesToEbook(id, files);
         await openEbook(id);
       }
@@ -1925,17 +1956,19 @@
       }
 
       async function addFilesToEbook(ebookId, files) {
-        const existing = await tracksForEbook(ebookId);
+        const existing = tracksForEbook(ebookId);
         const byName = new Map();
         for (const t of existing) {
           if (!byName.has(t.filename)) byName.set(t.filename, []);
           byName.get(t.filename).push(t);
         }
-        const eb = await dbGet('ebooks', ebookId);
+        const eb = getEbook(ebookId);
         let added = 0, replaced = 0, skipped = 0;
         let blanket = null;
         const multi = files.length > 1;
+        let i = 0;
         for (const f of files) {
+          i++;
           let choice = 'add';
           const dupes = byName.get(f.name) || [];
           if (dupes.length) {
@@ -1959,27 +1992,37 @@
           let replacedBookmark = false;
           if (choice === 'replace') {
             for (const old of dupes) {
-              await dbDelete('tracks', old.id);
+              delTrackMem(old.id);
+              await deleteAudio(old.id);
               if (eb && eb.lastTrackId === old.id) replacedBookmark = true;
             }
             byName.set(f.name, []);
             replaced++;
           }
           const meta = parseTrackName(f.name);
-          const blob = new Blob([await f.arrayBuffer()], { type: f.type || 'audio/mpeg' });
+          const id = uid();
+          showProgress(`Uploading ${i}/${files.length}: ${f.name}`, ((i - 1) / files.length) * 100);
+          try {
+            await uploadAudio(id, f);
+          } catch (err) {
+            hideProgress();
+            setStatus(`Upload failed for "${f.name}": ${err.message || err}`);
+            continue;
+          }
           const rec = {
-            id: uid(), ebookId, filename: f.name, blob,
+            id, ebookId, filename: f.name,
             fromPage: meta.fromPage, toPage: meta.toPage, chapter: meta.chapter,
-            label: meta.label, sizeBytes: blob.size, addedAt: Date.now(),
+            label: meta.label, sizeBytes: f.size, addedAt: Date.now(),
           };
-          await dbPut('tracks', rec);
-          // If we replaced the bookmarked track, keep the resume point on the new copy.
+          putTrack(rec);
           if (replacedBookmark) eb.lastTrackId = rec.id;
           if (!byName.has(f.name)) byName.set(f.name, []);
           byName.get(f.name).push(rec);
           if (choice !== 'replace') added++;
         }
-        if (eb) { eb.updatedAt = Date.now(); await dbPut('ebooks', eb); }
+        if (eb) { eb.updatedAt = Date.now(); }
+        try { await saveLib(); } catch (err) { setStatus('Saved files but metadata sync failed: ' + (err.message || err)); }
+        hideProgress();
         const parts = [];
         if (added) parts.push(`added ${added}`);
         if (replaced) parts.push(`replaced ${replaced}`);
@@ -1999,9 +2042,9 @@
       /* ---- ebook detail / player ---- */
       async function openEbook(id) {
         currentEbookId = id;
-        const eb = await dbGet('ebooks', id);
+        const eb = getEbook(id);
         if (!eb) return;
-        currentTracks = await tracksForEbook(id);
+        currentTracks = tracksForEbook(id);
         el('libraryListView').hidden = true;
         el('ebookDetailView').hidden = false;
         el('ebookTitle').textContent = eb.title;
@@ -2041,7 +2084,9 @@
           row.querySelector('[data-del]').addEventListener('click', async (ev) => {
             ev.stopPropagation();
             if (!confirm(`Delete recording "${t.label || t.filename}"?`)) return;
-            await dbDelete('tracks', t.id);
+            delTrackMem(t.id);
+            await deleteAudio(t.id);
+            try { await saveLib(); } catch {}
             await openEbook(currentEbookId);
           });
           list.appendChild(row);
@@ -2053,14 +2098,14 @@
         if (idx < 0 || idx >= currentTracks.length) return;
         currentTrackIdx = idx;
         const t = currentTracks[idx];
-        if (currentUrl) URL.revokeObjectURL(currentUrl);
-        currentUrl = URL.createObjectURL(t.blob);
-        audio.src = currentUrl;
+        audio.src = audioUrl(t.id);
         audio.playbackRate = parseFloat(el('ebookSpeed').value);
-        audio.currentTime = 0;
+        if (startAt) {
+          const seek = () => { try { audio.currentTime = startAt; } catch {} audio.removeEventListener('loadedmetadata', seek); };
+          audio.addEventListener('loadedmetadata', seek);
+        }
         await audio.play().catch(() => {});
-        if (startAt) { try { audio.currentTime = startAt; } catch {} }
-        const eb = await dbGet('ebooks', currentEbookId);
+        const eb = getEbook(currentEbookId);
         if (eb) renderTrackList(eb);
         saveBookmark(0);
       }
@@ -2074,13 +2119,14 @@
         const now = Date.now();
         if (!force && now - (saveBookmark._last || 0) < 4000) return;
         saveBookmark._last = now;
-        const eb = await dbGet('ebooks', currentEbookId);
+        const eb = getEbook(currentEbookId);
         if (!eb) return;
         eb.lastTrackId = currentTracks[currentTrackIdx].id;
         eb.lastPosition = audio.currentTime || 0;
         eb.updatedAt = now;
         eb.complete = false;
-        await dbPut('ebooks', eb);
+        putEbook(eb);
+        saveLib().catch(() => {});
       }
 
       audio.addEventListener('timeupdate', () => saveBookmark(false));
@@ -2089,14 +2135,14 @@
         if (currentTrackIdx < currentTracks.length - 1) {
           playTrack(currentTrackIdx + 1, 0);
         } else {
-          const eb = await dbGet('ebooks', currentEbookId);
-          if (eb) { eb.complete = true; eb.updatedAt = Date.now(); await dbPut('ebooks', eb); }
+          const eb = getEbook(currentEbookId);
+          if (eb) { eb.complete = true; eb.updatedAt = Date.now(); putEbook(eb); saveLib().catch(() => {}); }
           setStatus('Finished the audiobook.');
         }
       });
 
       el('ebookResume').addEventListener('click', async () => {
-        const eb = await dbGet('ebooks', currentEbookId);
+        const eb = getEbook(currentEbookId);
         let idx = 0, at = 0;
         if (eb && eb.lastTrackId) {
           const i = currentTracks.findIndex(t => t.id === eb.lastTrackId);
@@ -2120,35 +2166,39 @@
       });
 
       el('ebookDelete').addEventListener('click', async () => {
-        const eb = await dbGet('ebooks', currentEbookId);
+        const eb = getEbook(currentEbookId);
         if (!eb) return;
         if (!confirm(`Delete the entire audiobook "${eb.title}" and all its recordings? This cannot be undone.`)) return;
         stopPlayback();
-        for (const t of currentTracks) await dbDelete('tracks', t.id);
-        await dbDelete('ebooks', currentEbookId);
+        setStatus('Deleting…');
+        for (const t of currentTracks) { delTrackMem(t.id); await deleteAudio(t.id); }
+        delEbookMem(currentEbookId);
+        try { await saveLib(); } catch {}
         currentEbookId = null; currentTrackIdx = -1;
         el('ebookDetailView').hidden = true;
         el('libraryListView').hidden = false;
         await renderEbookList();
+        setStatus('Deleted.');
       });
 
       el('clearAllLibrary').addEventListener('click', async () => {
-        if (!confirm('Delete ALL audiobooks and recordings from this device? This cannot be undone.')) return;
+        if (!confirm('Delete ALL audiobooks and recordings from the cloud library? This cannot be undone.')) return;
         stopPlayback();
-        const ebooks = await dbGetAll('ebooks');
-        const tracks = await dbGetAll('tracks');
-        for (const t of tracks) await dbDelete('tracks', t.id);
-        for (const e of ebooks) await dbDelete('ebooks', e.id);
+        setStatus('Clearing library…');
+        for (const t of LIB.tracks.slice()) await deleteAudio(t.id);
+        LIB.ebooks = []; LIB.tracks = [];
+        try { await saveLib(); } catch {}
         currentEbookId = null;
         el('ebookDetailView').hidden = true;
         el('libraryListView').hidden = false;
         await renderEbookList();
+        setStatus('Library cleared.');
       });
 
       /* ---- export / import ---- */
       el('ebookExport').addEventListener('click', async () => {
         if (typeof JSZip === 'undefined') { setStatus('ZIP library unavailable.'); return; }
-        const eb = await dbGet('ebooks', currentEbookId);
+        const eb = getEbook(currentEbookId);
         if (!eb) return;
         const zip = new JSZip();
         const manifest = {
@@ -2159,11 +2209,17 @@
           tracks: [],
         };
         let lastTrackFilename = null;
+        let i = 0;
         for (const t of currentTracks) {
-          zip.file(t.filename, t.blob);
+          i++;
+          showProgress(`Exporting ${i}/${currentTracks.length}…`, ((i - 1) / currentTracks.length) * 100);
+          let blob;
+          try { blob = await fetchAudioBlob(t.id); } catch (err) { hideProgress(); setStatus('Export failed: ' + (err.message || err)); return; }
+          zip.file(t.filename, blob);
           manifest.tracks.push({ filename: t.filename, fromPage: t.fromPage, toPage: t.toPage, chapter: t.chapter, label: t.label });
           if (t.id === eb.lastTrackId) lastTrackFilename = t.filename;
         }
+        hideProgress();
         manifest.lastTrackFilename = lastTrackFilename;
         zip.file('ebook.json', JSON.stringify(manifest, null, 2));
         const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
@@ -2189,23 +2245,29 @@
           const now = Date.now();
           let lastTrackId = null;
           const byName = {};
+          let i = 0;
           for (const meta of manifest.tracks) {
+            i++;
             const zf = zip.file(meta.filename);
             if (!zf) continue;
             const blob = new Blob([await zf.async('arraybuffer')], { type: 'audio/mpeg' });
             const tid = uid();
             byName[meta.filename] = tid;
-            await dbPut('tracks', {
-              id: tid, ebookId: id, filename: meta.filename, blob,
+            showProgress(`Importing ${i}/${manifest.tracks.length}: ${meta.filename}`, ((i - 1) / manifest.tracks.length) * 100);
+            try { await uploadAudio(tid, blob); } catch (err) { hideProgress(); setStatus('Import failed: ' + (err.message || err)); return; }
+            putTrack({
+              id: tid, ebookId: id, filename: meta.filename,
               fromPage: meta.fromPage, toPage: meta.toPage, chapter: meta.chapter,
               label: meta.label || meta.filename, sizeBytes: blob.size, addedAt: Date.now(),
             });
           }
           if (manifest.lastTrackFilename && byName[manifest.lastTrackFilename]) lastTrackId = byName[manifest.lastTrackFilename];
-          await dbPut('ebooks', {
+          putEbook({
             id, title: manifest.title || 'Imported audiobook', createdAt: now, updatedAt: now,
             lastTrackId, lastPosition: manifest.lastPosition || 0, complete: !!manifest.complete,
           });
+          try { await saveLib(); } catch (err) { hideProgress(); setStatus('Import saved files but metadata sync failed: ' + (err.message || err)); return; }
+          hideProgress();
           await renderEbookList();
           setStatus(`Imported "${manifest.title}".`);
         } catch (err) {
