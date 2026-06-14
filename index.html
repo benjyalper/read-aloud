@@ -238,20 +238,48 @@
       margin-top: 7px;
     }
     .ebook-bar > div { height: 100%; background: var(--accent); border-radius: 3px; }
+    /* Drum picker: a fixed 3-row window. Center row highlighted, the two
+       neighbours dimmed. 160px = three 48px rows + two 8px gaps. The 56px
+       top/bottom padding lets the first & last rows roll to the centre. */
+    #trackList {
+      position: relative;
+      height: 160px;
+      overflow-y: auto;
+      scroll-snap-type: y mandatory;
+      -webkit-overflow-scrolling: touch;
+      padding: 56px 4px;
+      scrollbar-width: none;
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
+      mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
+    }
+    #trackList::-webkit-scrollbar { display: none; }
     .track {
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 9px 10px;
+      height: 48px;
+      padding: 0 10px;
       border: 1px solid var(--border);
-      border-radius: 8px;
-      margin-bottom: 6px;
+      border-radius: 10px;
+      margin-bottom: 8px;
       font-size: 14px;
+      scroll-snap-align: center;
+      cursor: pointer;
+      opacity: 0.4;
+      transform: scale(0.9);
+      transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
     }
-    .track.playing { border-color: var(--accent); background: rgba(79,140,255,0.08); }
+    .track.centered {
+      border-color: var(--accent);
+      background: rgba(79,140,255,0.12);
+      opacity: 1;
+      transform: scale(1);
+    }
+    .track.playing:not(.centered) { opacity: 0.55; }
+    .track.playing .tname { color: var(--accent); }
     .track .tmeta { flex: 1; min-width: 0; }
     .track .tname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .track .tsub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .track .tsub { font-size: 12px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .track .tgap { color: #e0a020; }
     .icon-btn {
       background: transparent;
@@ -2102,17 +2130,20 @@
         currentTracks.forEach((t, i) => {
           const gap = (t.fromPage != null && prevTo != null && t.fromPage > prevTo + 1);
           const row = document.createElement('div');
-          row.className = 'track' + (i === currentTrackIdx ? ' playing' : '');
+          const isBookmark = eb.lastTrackId === t.id;
+          row.className = 'track' + (i === currentTrackIdx ? ' playing' : '') + (isBookmark ? ' bookmark' : '');
           const pageStr = t.fromPage != null ? `pp ${t.fromPage}${t.toPage && t.toPage !== t.fromPage ? '-' + t.toPage : ''}` : 'no page info';
           row.innerHTML =
             `<button class="icon-btn" data-play="${i}">▶</button>
              <div class="tmeta">
                <div class="tname"></div>
-               <div class="tsub">${pageStr} · ${(t.sizeBytes/1024/1024).toFixed(1)} MB${gap ? ' · <span class="tgap">gap before this</span>' : ''}${eb.lastTrackId === t.id ? ' · ⏱ resume point' : ''}</div>
+               <div class="tsub">${pageStr} · ${(t.sizeBytes/1024/1024).toFixed(1)} MB${gap ? ' · <span class="tgap">gap before this</span>' : ''}${isBookmark ? ' · ⏱ resume point' : ''}</div>
              </div>
              <button class="icon-btn danger" data-del="${i}">✕</button>`;
           row.querySelector('.tname').textContent = t.label || t.filename;
-          row.querySelector('[data-play]').addEventListener('click', () => playTrack(i, 0));
+          const playThis = (ev) => { if (ev) ev.stopPropagation(); playTrack(i, 0); };
+          row.querySelector('[data-play]').addEventListener('click', playThis);
+          row.addEventListener('click', playThis);
           row.querySelector('[data-del]').addEventListener('click', async (ev) => {
             ev.stopPropagation();
             if (!confirm(`Delete recording "${t.label || t.filename}"?`)) return;
@@ -2124,7 +2155,66 @@
           list.appendChild(row);
           if (t.toPage != null) prevTo = t.toPage;
         });
+        setTimeout(() => centerCurrentTrack(false), 60);
       }
+
+      // ---- drum / wheel behavior ----
+      let programmaticScroll = false;
+      let snapTimer = 0;
+      // The row whose centre is closest to the window's middle is "centered"
+      // (highlighted); everything else is dimmed.
+      function nearestRow() {
+        const list = el('trackList');
+        if (!list) return null;
+        const mid = list.scrollTop + list.clientHeight / 2;
+        let best = null, bestDist = Infinity;
+        list.querySelectorAll('.track').forEach(row => {
+          const c = row.offsetTop + row.offsetHeight / 2;
+          const d = Math.abs(c - mid);
+          if (d < bestDist) { bestDist = d; best = row; }
+        });
+        return best;
+      }
+      function updateCentered() {
+        const list = el('trackList');
+        if (!list) return;
+        const best = nearestRow();
+        list.querySelectorAll('.track.centered').forEach(r => { if (r !== best) r.classList.remove('centered'); });
+        if (best) best.classList.add('centered');
+      }
+      function centerRow(row, smooth) {
+        const list = el('trackList');
+        if (!list || !row) return;
+        const target = row.offsetTop - (list.clientHeight / 2) + (row.offsetHeight / 2);
+        programmaticScroll = true;
+        list.scrollTo({ top: Math.max(0, target), behavior: smooth ? 'smooth' : 'auto' });
+        updateCentered();
+        clearTimeout(centerRow._t);
+        centerRow._t = setTimeout(() => { programmaticScroll = false; updateCentered(); }, smooth ? 650 : 80);
+      }
+      function centerCurrentTrack(smooth) {
+        const list = el('trackList');
+        if (!list) return;
+        const row = list.querySelector('.track.playing') || list.querySelector('.track.bookmark') || list.querySelector('.track');
+        centerRow(row, smooth);
+      }
+      (function initDrum() {
+        const list = el('trackList');
+        if (!list) return;
+        list.addEventListener('scroll', () => {
+          updateCentered();
+          if (programmaticScroll) return;
+          list.classList.add('rolling');
+          clearTimeout(snapTimer);
+          // While playing, nudging the wheel snaps back to the current track.
+          // While paused, the wheel clicks into place on the nearest track.
+          if (!audio.paused) {
+            snapTimer = setTimeout(() => { list.classList.remove('rolling'); centerCurrentTrack(true); }, 1400);
+          } else {
+            snapTimer = setTimeout(() => { list.classList.remove('rolling'); centerRow(nearestRow(), true); }, 500);
+          }
+        }, { passive: true });
+      })();
 
       async function playTrack(idx, startAt) {
         if (idx < 0 || idx >= currentTracks.length) return;
