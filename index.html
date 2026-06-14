@@ -1741,6 +1741,7 @@
       /* ---- server-backed storage (Railway volume via /api/lib) ---- */
       const LIB = { ebooks: [], tracks: [] };
       let loaded = false;
+      let libBusy = false; // true during batch upload/import so bookmark saves don't race
       let pass = localStorage.getItem('readaloud.pass') || '';
 
       const apiHeaders = (extra) => Object.assign({ 'x-app-pass': pass }, extra || {});
@@ -1775,6 +1776,21 @@
           body: fileOrBlob,
         });
         if (!r.ok) throw new Error('upload failed ' + r.status);
+      }
+      // Retry to survive flaky mobile networks, and verify the bytes landed.
+      async function uploadAudioReliable(id, fileOrBlob) {
+        let lastErr;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            await uploadAudio(id, fileOrBlob);
+            // confirm the server actually has it
+            const chk = await fetch(audioUrl(id), { headers: { Range: 'bytes=0-1' } });
+            if (chk.status === 200 || chk.status === 206) return true;
+            lastErr = new Error('verify failed ' + chk.status);
+          } catch (e) { lastErr = e; }
+          await new Promise(r => setTimeout(r, 400 * attempt));
+        }
+        throw lastErr || new Error('upload failed');
       }
       async function deleteAudio(id) {
         try { await fetch('/api/lib/audio/' + id, { method: 'DELETE', headers: apiHeaders() }); } catch {}
@@ -1972,8 +1988,10 @@
         }
         const eb = getEbook(ebookId);
         let added = 0, replaced = 0, skipped = 0;
+        const failed = [];
         let blanket = null;
         const multi = files.length > 1;
+        libBusy = true;
         let i = 0;
         for (const f of files) {
           i++;
@@ -2011,10 +2029,10 @@
           const id = uid();
           showProgress(`Uploading ${i}/${files.length}: ${f.name}`, ((i - 1) / files.length) * 100);
           try {
-            await uploadAudio(id, f);
+            await uploadAudioReliable(id, f);
           } catch (err) {
-            hideProgress();
-            setStatus(`Upload failed for "${f.name}": ${err.message || err}`);
+            console.warn('upload failed', f.name, err);
+            failed.push(f.name);
             continue;
           }
           const rec = {
@@ -2029,13 +2047,19 @@
           if (choice !== 'replace') added++;
         }
         if (eb) { eb.updatedAt = Date.now(); }
-        try { await saveLib(); } catch (err) { setStatus('Saved files but metadata sync failed: ' + (err.message || err)); }
+        try { await saveLib(); } catch (err) { libBusy = false; setStatus('Saved files but metadata sync failed: ' + (err.message || err)); return; }
+        libBusy = false;
         hideProgress();
         const parts = [];
         if (added) parts.push(`added ${added}`);
         if (replaced) parts.push(`replaced ${replaced}`);
         if (skipped) parts.push(`skipped ${skipped}`);
-        setStatus(parts.length ? parts.join(', ') + '.' : 'No changes.');
+        let msg = parts.length ? parts.join(', ') + '.' : 'No changes.';
+        if (failed.length) {
+          msg += `  ⚠ ${failed.length} failed — re-add: ${failed.join(', ')}`;
+          alert(`${failed.length} recording${failed.length === 1 ? '' : 's'} failed to upload (likely a network blip). Please add ${failed.length === 1 ? 'it' : 'them'} again:\n\n${failed.join('\n')}`);
+        }
+        setStatus(msg);
       }
 
       el('newEbookFile').addEventListener('change', async (e) => {
@@ -2134,6 +2158,7 @@
         eb.updatedAt = now;
         eb.complete = false;
         putEbook(eb);
+        if (libBusy) return; // don't race a batch upload's metadata write
         saveLib().catch(() => {});
       }
 
@@ -2273,7 +2298,7 @@
             const tid = uid();
             byName[meta.filename] = tid;
             showProgress(`Importing ${i}/${manifest.tracks.length}: ${meta.filename}`, ((i - 1) / manifest.tracks.length) * 100);
-            try { await uploadAudio(tid, blob); } catch (err) { hideProgress(); setStatus('Import failed: ' + (err.message || err)); return; }
+            try { await uploadAudioReliable(tid, blob); } catch (err) { hideProgress(); setStatus(`Import failed on "${meta.filename}": ${err.message || err}`); return; }
             putTrack({
               id: tid, ebookId: id, filename: meta.filename,
               fromPage: meta.fromPage, toPage: meta.toPage, chapter: meta.chapter,
