@@ -62,7 +62,7 @@ function escapeForSsml(text) {
     .replace(/>/g, '&gt;');
 }
 
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '30mb' }));
 app.use(express.static('.', { dotfiles: 'deny', extensions: ['html'] }));
 
 const VOICES = [
@@ -142,6 +142,7 @@ app.post('/api/tts', async (req, res) => {
 const DATA_DIR = process.env.DATA_DIR || '/data';
 const AUDIO_DIR = path.join(DATA_DIR, 'audio');
 const COVER_DIR = path.join(DATA_DIR, 'covers');
+const JOBS_DIR = path.join(DATA_DIR, 'jobs');
 const INDEX_FILE = path.join(DATA_DIR, 'index.json');
 const APP_PASSPHRASE = process.env.APP_PASSPHRASE || '';
 const LIB_ENABLED = !!APP_PASSPHRASE;
@@ -152,6 +153,7 @@ async function ensureLibDirs() {
   if (libReady) return;
   await fsp.mkdir(AUDIO_DIR, { recursive: true });
   await fsp.mkdir(COVER_DIR, { recursive: true });
+  await fsp.mkdir(JOBS_DIR, { recursive: true });
   try { await fsp.access(INDEX_FILE); }
   catch { await fsp.writeFile(INDEX_FILE, JSON.stringify({ ebooks: [], tracks: [] }), 'utf8'); }
   libReady = true;
@@ -329,6 +331,152 @@ app.get('/api/lib/cover/:id', checkPass, async (req, res) => {
   }
 });
 
+/* ===================== Background generation jobs ===================== */
+// The browser hands us the parts' text and walks away. The server generates
+// every MP3 (using its own always-on internet) and drops them straight into
+// the library, so the user's device is free to disconnect in between.
+const randomId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+
+// Synthesize an entire part to a single MP3 Buffer (chunked + XML-escaped).
+async function generateMp3Buffer(text, voice, ratePct) {
+  const rateStr = `${ratePct >= 0 ? '+' : ''}${ratePct}%`;
+  const chunks = chunkBySentence(String(text || '').trim(), CHUNK_SIZE);
+  const tts = new MsEdgeTTS();
+  await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+  const bufs = [];
+  try {
+    for (const ch of chunks) {
+      const { audioStream } = tts.toStream(escapeForSsml(ch), { rate: rateStr });
+      for await (const data of audioStream) bufs.push(data);
+    }
+  } finally { try { tts.close(); } catch {} }
+  return Buffer.concat(bufs);
+}
+
+// Serialized read-modify-write of index.json (shares writeChain with saves).
+function mutateIndex(fn) {
+  writeChain = writeChain.then(async () => {
+    let data;
+    try { data = JSON.parse(await fsp.readFile(INDEX_FILE, 'utf8')); }
+    catch { data = { ebooks: [], tracks: [] }; }
+    await fn(data);
+    const tmp = INDEX_FILE + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(data), 'utf8');
+    await fsp.rename(tmp, INDEX_FILE);
+  }).catch(err => console.error('[lib] mutateIndex failed', err));
+  return writeChain;
+}
+
+const jobs = {};
+function jobSummary(j) {
+  return {
+    id: j.id, ebookId: j.ebookId, title: j.title, status: j.status,
+    total: j.parts.length, done: j.done.length, failed: j.failed,
+    currentLabel: j.currentLabel || '', error: j.error || '', updatedAt: j.updatedAt,
+  };
+}
+async function persistJob(job) {
+  job.updatedAt = Date.now();
+  try { await fsp.writeFile(path.join(JOBS_DIR, job.id + '.json'), JSON.stringify(job), 'utf8'); } catch {}
+}
+async function removeJobFile(id) { try { await fsp.rm(path.join(JOBS_DIR, id + '.json'), { force: true }); } catch {} }
+
+async function runJob(job) {
+  job.status = 'running';
+  await persistJob(job);
+  for (; job.cursor < job.parts.length; job.cursor++) {
+    if (job.cancelled) { job.status = 'cancelled'; job.currentLabel = ''; await persistJob(job); return; }
+    const p = job.parts[job.cursor];
+    job.currentLabel = p.label || p.filename || `part ${job.cursor + 1}`;
+    await persistJob(job);
+    try {
+      const buf = await generateMp3Buffer(p.text, job.voice, job.rate);
+      if (!buf.length) { job.failed.push(job.currentLabel + ' (empty)'); continue; }
+      const tid = randomId();
+      await fsp.writeFile(path.join(AUDIO_DIR, tid + '.mp3'), buf);
+      await mutateIndex(d => {
+        d.tracks.push({
+          id: tid, ebookId: job.ebookId, filename: p.filename || (job.currentLabel + '.mp3'),
+          fromPage: p.fromPage ?? null, toPage: p.toPage ?? null, chapter: p.chapter || null,
+          label: p.label || p.filename || job.currentLabel, sizeBytes: buf.length, addedAt: Date.now(),
+        });
+        const eb = d.ebooks.find(e => e.id === job.ebookId);
+        if (eb) eb.updatedAt = Date.now();
+      });
+      job.done.push(p.filename || job.currentLabel);
+    } catch (err) {
+      console.error('[job] part failed', err.message);
+      job.failed.push(job.currentLabel + ': ' + (err.message || err));
+    }
+    await persistJob(job);
+  }
+  job.status = 'done';
+  job.currentLabel = '';
+  await persistJob(job);
+}
+
+async function loadJobsOnStartup() {
+  try {
+    await fsp.mkdir(JOBS_DIR, { recursive: true });
+    const files = await fsp.readdir(JOBS_DIR);
+    const cutoff = Date.now() - 24 * 3600 * 1000;
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      let j;
+      try { j = JSON.parse(await fsp.readFile(path.join(JOBS_DIR, f), 'utf8')); } catch { continue; }
+      // Drop stale finished jobs; resume interrupted ones.
+      if ((j.status === 'done' || j.status === 'cancelled') && (j.updatedAt || 0) < cutoff) { await removeJobFile(j.id); continue; }
+      jobs[j.id] = j;
+      if (j.status === 'running' || j.status === 'queued') { j.cancelled = false; runJob(j).catch(e => { j.status = 'error'; j.error = String(e.message || e); persistJob(j); }); }
+    }
+  } catch (err) { console.error('[job] startup load failed', err); }
+}
+
+// Create a background generation job.
+app.post('/api/lib/jobs', checkPass, async (req, res) => {
+  try {
+    const { ebookId, title, voice, rate = 0, parts } = req.body || {};
+    if (!Array.isArray(parts) || !parts.length) return res.status(400).json({ error: 'No parts.' });
+    if (!VOICES.find(v => v.id === voice)) return res.status(400).json({ error: 'Unknown voice.' });
+    await ensureLibDirs();
+    let ebId = ebookId;
+    if (ebId) {
+      if (!SAFE_ID.test(ebId)) return res.status(400).json({ error: 'Bad ebook id.' });
+    } else {
+      ebId = randomId();
+      await mutateIndex(d => { d.ebooks.push({ id: ebId, title: (title || 'Generated audiobook').slice(0, 200), createdAt: Date.now(), updatedAt: Date.now() }); });
+    }
+    const ratePct = Math.max(-50, Math.min(100, Math.round(Number(rate) || 0)));
+    const job = { id: randomId(), ebookId: ebId, title: title || '', voice, rate: ratePct, parts, done: [], failed: [], cursor: 0, status: 'queued', cancelled: false, createdAt: Date.now() };
+    jobs[job.id] = job;
+    await persistJob(job);
+    runJob(job).catch(e => { job.status = 'error'; job.error = String(e.message || e); persistJob(job); });
+    res.json({ jobId: job.id, ebookId: ebId, total: parts.length });
+  } catch (err) {
+    console.error('[job] create', err);
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+app.get('/api/lib/jobs', checkPass, (_req, res) => {
+  res.json(Object.values(jobs).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).map(jobSummary));
+});
+app.get('/api/lib/jobs/:id', checkPass, (req, res) => {
+  const j = jobs[req.params.id];
+  if (!j) return res.status(404).json({ error: 'Not found.' });
+  res.json(jobSummary(j));
+});
+// Cancel a running job, or dismiss a finished one.
+app.delete('/api/lib/jobs/:id', checkPass, async (req, res) => {
+  const j = jobs[req.params.id];
+  if (j) {
+    if (j.status === 'running' || j.status === 'queued') j.cancelled = true;
+    else { delete jobs[j.id]; await removeJobFile(j.id); }
+  }
+  res.json({ ok: true });
+});
+
 app.listen(PORT, '0.0.0.0', () => {
+  loadJobsOnStartup();
   console.log(`Read Aloud server listening on :${PORT}  (library ${LIB_ENABLED ? 'enabled' : 'disabled'})`);
 });

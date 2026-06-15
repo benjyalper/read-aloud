@@ -359,6 +359,20 @@
     .sheet .opt:last-child { border-bottom: none; }
 
     /* ===== Mini-player ===== */
+    /* Background generation job cards */
+    #jobList { margin-bottom: 14px; display: flex; flex-direction: column; gap: 10px; }
+    #jobList:empty { display: none; }
+    .job-card { border: 1px solid var(--accent); border-radius: 12px; padding: 11px 13px; background: rgba(79,140,255,0.07); }
+    .job-card .job-top { display: flex; align-items: center; gap: 8px; }
+    .job-card .job-title { font-weight: 700; font-size: 14px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .job-card .job-x { background: transparent; border: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 2px 6px; }
+    .job-card .job-x:hover { color: var(--text); }
+    .job-card .job-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .job-card .job-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 7px; }
+    .job-card .job-bar > div { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s ease; }
+    .job-card.done { border-color: #2e9e5b; background: rgba(46,158,91,0.08); }
+    .job-card.error { border-color: #c0392b; background: rgba(192,57,43,0.08); }
+
     #miniPlayer[hidden] { display: none !important; }
     #miniPlayer {
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 1500;
@@ -512,7 +526,10 @@
       <div class="small" id="partActiveInfo" style="margin-top:8px; opacity:0.7;"></div>
       <div class="row" style="margin-top:10px; gap:6px;">
         <input type="text" id="partsRange" placeholder="all (or 4-13, 50-55, 100-)" autocomplete="off" style="flex:1; min-width:160px; background:transparent; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:14px; font-family:inherit; min-height:40px;">
-        <button class="btn" id="genAllParts" type="button" title="Generate MP3 for the selected parts and download as ZIP">Generate ⚡ (ZIP)</button>
+      </div>
+      <div class="row" style="margin-top:8px; gap:6px;">
+        <button class="btn" id="genToLibrary" type="button" title="Generate on the server, straight into your cloud library — you can close the app while it runs" style="flex:1; min-width:170px;">☁ Generate to Library</button>
+        <button class="btn secondary" id="genAllParts" type="button" title="Generate MP3 for the selected parts and download as a ZIP (keeps the tab open)">⚡ ZIP download</button>
       </div>
       <div class="small" id="rangeHint" style="margin-top:6px; opacity:0.7;"></div>
     </section>
@@ -578,6 +595,7 @@
             ↑ Import .zip
           </label>
         </div>
+        <div id="jobList"></div>
         <div id="ebookList"></div>
         <div class="small" id="emptyLibrary" style="opacity:0.7;">No audiobooks yet. Tap “New audiobook” and upload one or more MP3s — you’ll be asked to name the book.</div>
         <div class="small" id="storageMeter" style="margin-top:12px; opacity:0.6;"></div>
@@ -979,7 +997,7 @@
     });
 
     let genAllAbort = null;
-    const GEN_ALL_IDLE = 'Generate ⚡ (ZIP)';
+    const GEN_ALL_IDLE = '⚡ ZIP download';
     const GEN_ALL_BUSY = '⏹ Stop & save what we have';
     const rangeInputEl = $('partsRange');
     const rangeHintEl = $('rangeHint');
@@ -1241,6 +1259,42 @@
         setStatus(`⚠ ${emptyParts.length} part${emptyParts.length === 1 ? '' : 's'} came back empty and ${emptyParts.length === 1 ? 'was' : 'were'} skipped: ${list}. Re-generate ${emptyParts.length === 1 ? 'it' : 'them'}.`);
         alert(`${emptyParts.length} part${emptyParts.length === 1 ? '' : 's'} produced no audio and ${emptyParts.length === 1 ? 'was' : 'were'} left out of the ZIP:\n\n${list}\n\nRe-generate just these (set the page range and Generate again).`);
       }
+    });
+
+    // Build a track's filename/label/pages from a part (mirrors the ZIP naming).
+    function buildPartMeta(part, partNum) {
+      const padding = String(docParts.length).length;
+      const pagePadding = String(docTotalPages || 1).length;
+      let filename, fromPage = null, toPage = null;
+      if (part.pages) {
+        fromPage = part.pages.from; toPage = part.pages.to;
+        const f = String(fromPage).padStart(pagePadding, '0');
+        const t = String(toPage).padStart(pagePadding, '0');
+        const suffix = part.subTotal ? `-${String.fromCharCode(97 + part.subIndex)}` : '';
+        const pp = fromPage === toPage ? `pp ${f}` : `pp ${f}-${t}`;
+        filename = part.chapter ? `${part.chapter} - ${pp}${suffix}.mp3` : `${pp}${suffix}.mp3`;
+      } else {
+        filename = `${String(partNum).padStart(padding, '0')}-of-${docParts.length}.mp3`;
+      }
+      const pp = part.pages ? `pp ${part.pages.from}${part.pages.to !== part.pages.from ? '-' + part.pages.to : ''}` : '';
+      const label = part.chapter ? (part.chapter + (pp ? ` · ${pp}` : '')) : (pp || `Part ${partNum}`);
+      return { text: part.text, filename, fromPage, toPage, chapter: part.chapter || null, label };
+    }
+
+    // Generate on the server straight into the cloud library (device can disconnect).
+    $('genToLibrary').addEventListener('click', async () => {
+      if (!docParts.length) { setStatus('No parts to generate. Split first.'); return; }
+      const voice = hqVoiceEl.value;
+      if (!voice || voice === 'Server unavailable') { setStatus('Voice picker is empty — refresh the page and try again.'); return; }
+      const selected = parseRange(rangeInputEl.value, docParts.length);
+      if (selected === null) { setStatus(`❌ Range "${rangeInputEl.value}" is invalid — fix and try again.`); return; }
+      if (!selected.length) { setStatus(`❌ No parts match "${rangeInputEl.value}". Clear the range to generate all.`); return; }
+      if (typeof window.startLibraryJob !== 'function') { setStatus('Library isn’t ready — open the Library tab once, then retry.'); return; }
+      const ratePct = Math.round((parseFloat(speedEl.value) - 1) * 100);
+      const parts = selected.map(n => buildPartMeta(docParts[n - 1], n));
+      const title = (prompt(`Name this audiobook (${parts.length} part${parts.length === 1 ? '' : 's'} will generate on the server):`, '') || '').trim();
+      if (!title) { setStatus('Cancelled — an audiobook name is required.'); return; }
+      await window.startLibraryJob({ title, voice, ratePct, parts });
     });
 
     $('clearParts').addEventListener('click', () => {
@@ -2139,6 +2193,7 @@
         el('libraryView').hidden = true;
         el('tabReader').classList.add('active');
         el('tabLibrary').classList.remove('active');
+        stopJobPolling();
         updateMini();
       }
       async function ensureAuth() {
@@ -2177,9 +2232,81 @@
         }
         await renderEbookList();
         updateMini();
+        startJobPolling(true);
       }
       el('tabReader').addEventListener('click', () => { stopPlayback(); showReader(); });
       el('tabLibrary').addEventListener('click', showLibrary);
+
+      /* ---- background generation jobs (server-side) ---- */
+      let jobPollTimer = 0;
+      let jobsWereActive = false;
+      function stopJobPolling() { if (jobPollTimer) { clearInterval(jobPollTimer); jobPollTimer = 0; } }
+      function startJobPolling(immediate) {
+        stopJobPolling();
+        if (immediate) pollJobs();
+        jobPollTimer = setInterval(pollJobs, 3000);
+      }
+      async function pollJobs() {
+        if (el('libraryView').hidden) { stopJobPolling(); return; }
+        let list;
+        try {
+          const r = await fetch('/api/lib/jobs', { headers: apiHeaders() });
+          if (!r.ok) return;
+          list = await r.json();
+        } catch { return; }
+        const active = list.filter(j => j.status === 'queued' || j.status === 'running');
+        libBusy = active.length > 0; // block bookmark saves from clobbering server-added tracks
+        // Keep the library fresh while tracks land on the server.
+        if (active.length || jobsWereActive) { try { await loadLib(); } catch {} await renderEbookList(); }
+        renderJobs(list);
+        if (active.length) { jobsWereActive = true; }
+        else { jobsWereActive = false; if (!list.length) stopJobPolling(); }
+      }
+      function renderJobs(list) {
+        const wrap = el('jobList');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        for (const j of list) {
+          const running = j.status === 'queued' || j.status === 'running';
+          const card = document.createElement('div');
+          card.className = 'job-card' + (j.status === 'done' ? ' done' : j.status === 'error' ? ' error' : '');
+          const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+          let sub;
+          if (running) sub = `${j.done}/${j.total} done${j.currentLabel ? ` · now: ${j.currentLabel}` : ''}${j.failed.length ? ` · ${j.failed.length} failed` : ''}`;
+          else if (j.status === 'done') sub = `✓ Finished — ${j.done}/${j.total} generated${j.failed.length ? `, ${j.failed.length} failed` : ''}`;
+          else if (j.status === 'cancelled') sub = `Stopped — ${j.done}/${j.total} generated`;
+          else sub = `Error: ${j.error || 'unknown'}`;
+          card.innerHTML =
+            `<div class="job-top"><div class="job-title"></div><button class="job-x" title="${running ? 'Stop' : 'Dismiss'}">${running ? '⏹' : '✕'}</button></div>
+             <div class="job-sub"></div>
+             <div class="job-bar"><div style="width:${pct}%"></div></div>`;
+          card.querySelector('.job-title').textContent = (running ? '☁ ' : '') + (j.title || 'Audiobook');
+          card.querySelector('.job-sub').textContent = sub;
+          card.querySelector('.job-x').addEventListener('click', async () => {
+            try { await fetch('/api/lib/jobs/' + j.id, { method: 'DELETE', headers: apiHeaders() }); } catch {}
+            pollJobs();
+          });
+          wrap.appendChild(card);
+        }
+      }
+      // Called from the Reader's "Generate to Library" button (outer scope).
+      window.startLibraryJob = async function ({ title, voice, ratePct, parts }) {
+        const ok = await ensureAuth();
+        if (!ok) { setStatus('Library passphrase needed to generate to the cloud.'); return; }
+        setStatus('Sending parts to the server…');
+        try {
+          const r = await fetch('/api/lib/jobs', {
+            method: 'POST',
+            headers: apiHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ title, voice, rate: ratePct, parts }),
+          });
+          if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.status); }
+          const { total } = await r.json();
+          setStatus(`☁ Generating ${total} part${total === 1 ? '' : 's'} on the server. You can close the app — progress shows in the Library tab.`);
+          await showLibrary();
+          startJobPolling(true);
+        } catch (err) { setStatus('Could not start generation: ' + (err.message || err)); }
+      };
 
       function updateStorageMeter() {
         const bytes = LIB.tracks.reduce((a, t) => a + (t.sizeBytes || 0), 0);
