@@ -365,6 +365,9 @@
     .job-card { border: 1px solid var(--accent); border-radius: 12px; padding: 11px 13px; background: rgba(79,140,255,0.07); }
     .job-card .job-top { display: flex; align-items: center; gap: 8px; }
     .job-card .job-title { font-weight: 700; font-size: 14px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .job-card .job-resume { background: var(--accent); color: #fff; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; padding: 4px 10px; cursor: pointer; margin-right: 6px; }
+    .job-card .job-resume:hover { background: var(--accent-hover); }
+    .job-card .job-resume:disabled { opacity: 0.5; cursor: default; }
     .job-card .job-x { background: transparent; border: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 2px 6px; }
     .job-card .job-x:hover { color: var(--text); }
     .job-card .job-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
@@ -2275,13 +2278,22 @@
           else if (j.status === 'done') sub = `✓ Finished — ${j.done}/${j.total} generated${j.failed.length ? `, ${j.failed.length} failed` : ''}`;
           else if (j.status === 'cancelled') sub = `Stopped — ${j.done}/${j.total} generated`;
           else sub = `Error: ${j.error || 'unknown'}`;
+          const resumable = (j.status === 'cancelled' || j.status === 'error') && j.done < j.total;
           card.innerHTML =
-            `<div class="job-top"><div class="job-title"></div><button class="job-x" title="${running ? 'Stop' : 'Dismiss'}">${running ? '⏹' : '✕'}</button></div>
+            `<div class="job-top"><div class="job-title"></div>${resumable ? '<button class="job-resume">▶ Resume</button>' : ''}<button class="job-x" title="${running ? 'Stop' : 'Dismiss'}">${running ? '⏹' : '✕'}</button></div>
              <div class="job-sub"></div>
              <div class="job-bar"><div style="width:${pct}%"></div></div>`;
           card.querySelector('.job-title').textContent = (running ? '☁ ' : '') + (j.title || 'Audiobook');
           card.querySelector('.job-sub').textContent = sub;
+          const rb = card.querySelector('.job-resume');
+          if (rb) rb.addEventListener('click', async () => {
+            rb.disabled = true;
+            try { await fetch('/api/lib/jobs/' + j.id + '/resume', { method: 'POST', headers: apiHeaders() }); } catch {}
+            setStatus('Resuming generation…');
+            startJobPolling(true);
+          });
           card.querySelector('.job-x').addEventListener('click', async () => {
+            if (running && !confirm('Stop this generation? Parts already finished are kept; you can Resume later.')) return;
             try { await fetch('/api/lib/jobs/' + j.id, { method: 'DELETE', headers: apiHeaders() }); } catch {}
             pollJobs();
           });

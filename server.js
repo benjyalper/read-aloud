@@ -476,6 +476,18 @@ app.delete('/api/lib/jobs/:id', checkPass, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Resume a stopped/errored job from where it left off.
+app.post('/api/lib/jobs/:id/resume', checkPass, (req, res) => {
+  const j = jobs[req.params.id];
+  if (!j) return res.status(404).json({ error: 'Not found.' });
+  if (j.status === 'running' || j.status === 'queued') return res.json({ ok: true });
+  if (j.cursor >= j.parts.length) return res.json({ ok: true, done: true });
+  j.cancelled = false;
+  j.error = '';
+  runJob(j).catch(e => { j.status = 'error'; j.error = String(e.message || e); persistJob(j); });
+  res.json({ ok: true });
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   loadJobsOnStartup();
   console.log(`Read Aloud server listening on :${PORT}  (library ${LIB_ENABLED ? 'enabled' : 'disabled'})`);
