@@ -141,6 +141,7 @@ app.post('/api/tts', async (req, res) => {
 /* ============================ LIBRARY (server-backed) ============================ */
 const DATA_DIR = process.env.DATA_DIR || '/data';
 const AUDIO_DIR = path.join(DATA_DIR, 'audio');
+const COVER_DIR = path.join(DATA_DIR, 'covers');
 const INDEX_FILE = path.join(DATA_DIR, 'index.json');
 const APP_PASSPHRASE = process.env.APP_PASSPHRASE || '';
 const LIB_ENABLED = !!APP_PASSPHRASE;
@@ -150,6 +151,7 @@ let libReady = false;
 async function ensureLibDirs() {
   if (libReady) return;
   await fsp.mkdir(AUDIO_DIR, { recursive: true });
+  await fsp.mkdir(COVER_DIR, { recursive: true });
   try { await fsp.access(INDEX_FILE); }
   catch { await fsp.writeFile(INDEX_FILE, JSON.stringify({ ebooks: [], tracks: [] }), 'utf8'); }
   libReady = true;
@@ -276,6 +278,53 @@ app.get('/api/lib/audio/:id', checkPass, async (req, res) => {
     }
   } catch (err) {
     console.error('[lib] stream', err);
+    if (!res.headersSent) res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+// Upload a cover image (raw body, any content-type; client sends a small JPEG/PNG).
+app.post('/api/lib/cover/:id', checkPass, express.raw({ type: () => true, limit: '8mb' }), async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!SAFE_ID.test(id)) { console.warn('[lib] cover bad id', JSON.stringify(id)); return res.status(400).json({ error: 'Bad id.' }); }
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'Empty upload.' });
+    await ensureLibDirs();
+    await fsp.writeFile(path.join(COVER_DIR, id + '.img'), req.body);
+    res.json({ ok: true, size: req.body.length });
+  } catch (err) {
+    console.error('[lib] cover upload', err);
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+// Delete a cover image.
+app.delete('/api/lib/cover/:id', checkPass, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!SAFE_ID.test(id)) return res.status(400).json({ error: 'Bad id.' });
+    await fsp.rm(path.join(COVER_DIR, id + '.img'), { force: true });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[lib] cover delete', err);
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+// Stream a cover image (content-type sniffed from magic bytes).
+app.get('/api/lib/cover/:id', checkPass, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!SAFE_ID.test(id)) return res.status(400).json({ error: 'Bad id.' });
+    const file = path.join(COVER_DIR, id + '.img');
+    let buf;
+    try { buf = await fsp.readFile(file); }
+    catch { return res.status(404).json({ error: 'Not found.' }); }
+    const isPng = buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50;
+    res.setHeader('Content-Type', isPng ? 'image/png' : 'image/jpeg');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(buf);
+  } catch (err) {
+    console.error('[lib] cover stream', err);
     if (!res.headersSent) res.status(500).json({ error: String(err.message || err) });
   }
 });

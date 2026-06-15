@@ -79,6 +79,7 @@
     }
     textarea:focus { outline: none; border-color: var(--accent); }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .row[hidden] { display: none !important; }
     .row + .row { margin-top: 12px; }
     .btn {
       display: inline-flex;
@@ -238,6 +239,140 @@
       margin-top: 7px;
     }
     .ebook-bar > div { height: 100%; background: var(--accent); border-radius: 3px; }
+
+    /* ===== Audiobook covers (auto-generated gradient, optional uploaded image) ===== */
+    .cover {
+      position: relative;
+      aspect-ratio: 1 / 1;
+      border-radius: 12px;
+      overflow: hidden;
+      background-size: cover;
+      background-position: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+    .cover .cover-text {
+      padding: 10% 12%;
+      text-align: center;
+      font-weight: 800;
+      font-size: 15px;
+      line-height: 1.18;
+      letter-spacing: 0.2px;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.45);
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+    }
+    .cover.has-img .cover-text { display: none; }
+
+    /* ===== Library: cover-art cards ===== */
+    #ebookList.cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 16px;
+    }
+    .lib-card {
+      position: relative;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform 0.12s ease, border-color 0.12s ease;
+    }
+    .lib-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+    .lib-card .cover { border-radius: 0; }
+    .lib-card .cover-prog {
+      position: absolute; left: 0; right: 0; bottom: 0; height: 4px;
+      background: rgba(0,0,0,0.35);
+    }
+    .lib-card .cover-prog > div { height: 100%; background: var(--accent); }
+    .lib-card .card-body { padding: 9px 11px 12px; }
+    .lib-card .card-title {
+      font-size: 14px; font-weight: 700; line-height: 1.25;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .lib-card .card-sub { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+    .lib-card .card-menu {
+      position: absolute; top: 6px; right: 6px;
+      width: 30px; height: 30px; border-radius: 50%;
+      border: none; background: rgba(0,0,0,0.42); color: #fff;
+      font-size: 16px; line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .lib-card .card-menu:hover { background: rgba(0,0,0,0.65); }
+
+    /* ===== Full-screen-style player ===== */
+    .player-top { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+    .player-cover { width: min(300px, 64vw); margin: 0 auto 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.28); }
+    .player-cover .cover-text { font-size: 24px; }
+    .player-title { text-align: center; font-size: 20px; font-weight: 700; line-height: 1.25; }
+    .player-sub { text-align: center; font-size: 13px; color: var(--muted); margin-top: 3px; }
+    .scrub-times { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: var(--muted); margin-top: 18px; }
+    .scrub-times .mid { font-weight: 600; color: var(--text); font-size: 13px; }
+    .scrubber { position: relative; height: 6px; background: var(--border); border-radius: 3px; margin: 9px 0 2px; cursor: pointer; touch-action: none; }
+    .scrubber > .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; pointer-events: none; }
+    .scrubber > .knob { position: absolute; top: 50%; left: 0; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); transform: translate(-50%, -50%); pointer-events: none; box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
+    .track-pill {
+      display: flex; align-items: center; gap: 8px; width: max-content; max-width: 80%;
+      margin: 16px auto 4px; padding: 8px 16px;
+      border: 1px solid var(--border); border-radius: 999px; background: var(--panel);
+      cursor: pointer; font-size: 14px;
+    }
+    .track-pill:hover { border-color: var(--accent); }
+    .track-pill .tp-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .transport { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 8px; }
+    .round-btn {
+      background: transparent; border: none; color: var(--text); cursor: pointer;
+      font-size: 22px; width: 48px; height: 48px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center; position: relative;
+    }
+    .round-btn:hover { background: var(--border); }
+    .round-btn:disabled { opacity: 0.3; cursor: default; }
+    .round-btn .skip-num { position: absolute; font-size: 9px; font-weight: 700; }
+    .play-big {
+      width: 76px; height: 76px; border-radius: 50%;
+      border: 3px solid var(--accent); background: transparent; color: var(--text);
+      font-size: 30px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+    .play-big:hover { background: var(--accent); color: #fff; }
+    .player-tools { display: flex; align-items: center; justify-content: space-around; margin-top: 20px; gap: 6px; }
+    .tool-btn {
+      background: transparent; border: 1px solid transparent; color: var(--muted); cursor: pointer;
+      font-size: 18px; padding: 6px 10px; border-radius: 8px; min-width: 44px;
+      display: flex; align-items: center; justify-content: center; gap: 4px;
+    }
+    .tool-btn:hover { color: var(--text); background: var(--border); }
+    .tool-btn.active { color: var(--accent); }
+    .speed-pill { font-size: 13px; font-weight: 700; border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; }
+
+    /* sleep-timer popover */
+    .sheet-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1800; display: flex; align-items: flex-end; justify-content: center; }
+    .sheet { background: var(--panel); border: 1px solid var(--border); border-radius: 16px 16px 0 0; width: 100%; max-width: 480px; padding: 14px 16px 22px; }
+    .sheet h3 { margin: 4px 0 12px; font-size: 16px; }
+    .sheet .opt { display: block; width: 100%; text-align: left; background: transparent; border: none; color: var(--text); font-size: 15px; padding: 12px 6px; border-bottom: 1px solid var(--border); cursor: pointer; }
+    .sheet .opt:hover { color: var(--accent); }
+    .sheet .opt:last-child { border-bottom: none; }
+
+    /* ===== Mini-player ===== */
+    #miniPlayer[hidden] { display: none !important; }
+    #miniPlayer {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 1500;
+      display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+      background: var(--panel); border-top: 1px solid var(--border);
+      box-shadow: 0 -4px 16px rgba(0,0,0,0.18);
+    }
+    #miniPlayer .cover { width: 42px; height: 42px; flex: 0 0 auto; border-radius: 8px; }
+    #miniPlayer .cover .cover-text { font-size: 8px; padding: 2px; -webkit-line-clamp: 2; }
+    #miniPlayer .mp-meta { flex: 1; min-width: 0; }
+    #miniPlayer .mp-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #miniPlayer .mp-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #miniPlayer .mp-btn { background: transparent; border: none; color: var(--text); font-size: 22px; cursor: pointer; padding: 4px 8px; }
+    body.has-mini { padding-bottom: 64px; }
     /* Drum picker: a fixed 3-row window. Center row highlighted, the two
        neighbours dimmed. 160px = three 48px rows + two 8px gaps. The 56px
        top/bottom padding lets the first & last rows roll to the centre. */
@@ -452,42 +587,70 @@
       </section>
 
       <section class="panel" id="ebookDetailView" hidden>
-        <div class="row" style="margin-bottom: 8px;">
+        <div class="player-top">
           <button class="icon-btn" id="ebookBack" type="button">← Library</button>
           <span class="small" id="ebookDetailMeta" style="flex:1; text-align:right; opacity:0.7;"></span>
         </div>
-        <h2 id="ebookTitle" style="font-size:19px; margin:4px 0 10px;"></h2>
 
-        <div class="row" style="gap:8px; margin-bottom:10px;">
-          <button class="btn" id="ebookResume" type="button">▶ Resume</button>
-          <button class="btn secondary" id="ebookRestart" type="button">↺ Start over</button>
+        <div class="cover player-cover" id="playerCover"><div class="cover-text"></div></div>
+        <div class="player-title" id="ebookTitle"></div>
+        <div class="player-sub" id="playerSub"></div>
+
+        <div class="scrub-times">
+          <span id="timeElapsed">0:00</span>
+          <span class="mid" id="timeRemaining"></span>
+          <span id="timeTotal">0:00</span>
+        </div>
+        <div class="scrubber" id="scrubber">
+          <div class="fill" id="scrubFill"></div>
+          <div class="knob" id="scrubKnob"></div>
         </div>
 
-        <audio id="ebookAudio" controls style="width:100%; margin-bottom:6px;"></audio>
-        <div class="row" style="margin-bottom:12px;">
-          <div class="speed">
-            <span class="small">Speed</span>
-            <input type="range" id="ebookSpeed" min="0.5" max="2" step="0.1" value="1" aria-label="Speed">
-            <span id="ebookSpeedValue" class="small">1.0×</span>
-          </div>
-        </div>
-
-        <div class="row" style="justify-content:flex-end; margin-bottom:6px;">
+        <button class="track-pill" id="trackPill" type="button">
+          <span>⠿</span><span class="tp-label" id="trackPillLabel">Tracks</span><span id="trackPillCaret">▾</span>
+        </button>
+        <div class="row" id="trackListTools" hidden style="justify-content:flex-end; margin:4px 0 2px;">
           <button class="icon-btn" id="trackViewToggle" type="button" title="Switch between drum and list view">☰ List view</button>
         </div>
-        <div id="trackList"></div>
+        <div id="trackList" hidden></div>
 
-        <div class="row" style="margin-top:12px; gap:6px;">
-          <label class="btn secondary">
-            <input type="file" id="addTrackFile" accept="audio/*,.mp3,.m4a,.aac,.ogg,.wav" multiple hidden>
-            ＋ Add recordings
-          </label>
+        <div class="transport">
+          <button class="round-btn" id="prevTrack" type="button" title="Previous track">⏮</button>
+          <button class="round-btn" id="skipBack" type="button" title="Back 30 seconds">↺<span class="skip-num">30</span></button>
+          <button class="play-big" id="playBig" type="button" aria-label="Play">▶</button>
+          <button class="round-btn" id="skipFwd" type="button" title="Forward 30 seconds">↻<span class="skip-num">30</span></button>
+          <button class="round-btn" id="nextTrack" type="button" title="Next track">⏭</button>
+        </div>
+
+        <div class="player-tools">
+          <button class="tool-btn speed-pill" id="speedPill" type="button" title="Playback speed">1.0×</button>
+          <button class="tool-btn" id="sleepBtn" type="button" title="Sleep timer">🌙</button>
+          <label class="tool-btn" title="Add recordings">＋<input type="file" id="addTrackFile" accept="audio/*,.mp3,.m4a,.aac,.ogg,.wav" multiple hidden></label>
+          <button class="tool-btn" id="moreBtn" type="button" title="More options">⋯</button>
+        </div>
+
+        <div class="row" id="moreActions" hidden style="margin-top:14px; gap:6px; justify-content:center;">
+          <button class="icon-btn" id="ebookRestart" type="button">↺ Start over</button>
+          <button class="icon-btn" id="ebookCover" type="button">🖼 Change cover</button>
           <button class="icon-btn" id="ebookExport" type="button">↓ Export .zip</button>
           <button class="icon-btn danger" id="ebookDelete" type="button">Delete book</button>
+          <input type="file" id="coverFile" accept="image/*" hidden>
         </div>
+
+        <input type="hidden" id="ebookSpeed" value="1">
+        <audio id="ebookAudio" hidden></audio>
       </section>
 
     </div><!-- /libraryView -->
+
+    <div id="miniPlayer" hidden>
+      <div class="cover" id="miniCover"><div class="cover-text"></div></div>
+      <div class="mp-meta" id="miniOpen">
+        <div class="mp-title" id="miniTitle"></div>
+        <div class="mp-sub" id="miniSub"></div>
+      </div>
+      <button class="mp-btn" id="miniPlay" type="button" aria-label="Play/Pause">▶</button>
+    </div>
 
     <div id="dlgOverlay" hidden style="position:fixed; inset:0; background:rgba(0,0,0,0.55); display:flex; align-items:center; justify-content:center; z-index:2000; padding:16px;">
       <div class="panel" style="max-width:380px; width:100%; margin:0;">
@@ -1874,6 +2037,59 @@
         return r.blob();
       }
 
+      /* ---- covers (auto-generated gradient, optional uploaded image) ---- */
+      const coverUrl = (id) => '/api/lib/cover/' + id + '?p=' + encodeURIComponent(pass);
+      function hashCode(str) { let h = 0; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0; return h; }
+      function coverGradient(title) {
+        const h = hashCode(title || '?');
+        const a = h % 360, b = (a + 35 + (h >> 4) % 70) % 360;
+        return `linear-gradient(140deg, hsl(${a} 58% 40%), hsl(${b} 52% 22%))`;
+      }
+      // Paint a .cover element: gradient + title text by default; swap in the
+      // uploaded image once it loads (falls back to the gradient if missing).
+      function applyCoverEl(elm, eb) {
+        if (!elm) return;
+        const txt = elm.querySelector('.cover-text');
+        if (txt) txt.textContent = eb.title || 'Untitled';
+        elm.style.backgroundImage = coverGradient(eb.title);
+        elm.classList.remove('has-img');
+        if (eb.coverUpdatedAt) {
+          const url = coverUrl(eb.id) + '&v=' + eb.coverUpdatedAt;
+          const probe = new Image();
+          probe.onload = () => { elm.style.backgroundImage = `url("${url}")`; elm.classList.add('has-img'); };
+          probe.src = url;
+        }
+      }
+      function compressImage(file, maxDim, quality) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            let w = img.width, h = img.height;
+            const scale = Math.min(1, maxDim / Math.max(w, h));
+            w = Math.round(w * scale); h = Math.round(h * scale);
+            const c = document.createElement('canvas'); c.width = w; c.height = h;
+            c.getContext('2d').drawImage(img, 0, 0, w, h);
+            c.toBlob(b => b ? resolve(b) : reject(new Error('encode failed')), 'image/jpeg', quality);
+          };
+          img.onerror = () => reject(new Error('image load failed'));
+          img.src = URL.createObjectURL(file);
+        });
+      }
+      async function uploadCover(id, file) {
+        const blob = await compressImage(file, 700, 0.82);
+        const r = await fetch('/api/lib/cover/' + id, { method: 'POST', headers: apiHeaders({ 'Content-Type': 'image/jpeg' }), body: blob });
+        if (!r.ok) throw new Error('cover upload failed ' + r.status);
+      }
+      async function deleteCover(id) {
+        try { await fetch('/api/lib/cover/' + id, { method: 'DELETE', headers: apiHeaders() }); } catch {}
+      }
+      function fmtClock(s) {
+        if (!isFinite(s) || s < 0) s = 0;
+        s = Math.floor(s);
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+      }
+
       // in-memory helpers over LIB
       const getEbook = (id) => LIB.ebooks.find(e => e.id === id);
       function putEbook(eb) { const i = LIB.ebooks.findIndex(e => e.id === eb.id); if (i >= 0) LIB.ebooks[i] = eb; else LIB.ebooks.push(eb); }
@@ -1923,6 +2139,7 @@
         el('libraryView').hidden = true;
         el('tabReader').classList.add('active');
         el('tabLibrary').classList.remove('active');
+        updateMini();
       }
       async function ensureAuth() {
         const ping = await libPing();
@@ -1959,6 +2176,7 @@
           return;
         }
         await renderEbookList();
+        updateMini();
       }
       el('tabReader').addEventListener('click', () => { stopPlayback(); showReader(); });
       el('tabLibrary').addEventListener('click', showLibrary);
@@ -1987,31 +2205,34 @@
       async function renderEbookList() {
         const ebooks = LIB.ebooks.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
         const list = el('ebookList');
+        list.className = 'cards';
         list.innerHTML = '';
         el('emptyLibrary').hidden = ebooks.length > 0;
         for (const eb of ebooks) {
           const tracks = tracksForEbook(eb.id);
           const prog = await ebookProgress(eb, tracks);
           const card = document.createElement('div');
-          card.className = 'ebook-card';
+          card.className = 'lib-card';
           card.innerHTML =
-            `<div class="meta">
-               <div class="title"></div>
-               <div class="sub"></div>
-               <div class="ebook-bar"><div style="width:${prog.pct}%"></div></div>
-             </div>
-             <button class="icon-btn" data-act="open">Open</button>
-             <button class="icon-btn danger" data-act="del" title="Delete this audiobook">✕</button>`;
-          card.querySelector('.title').textContent = eb.title;
-          card.querySelector('.sub').textContent = `${prog.label} · ${prog.pct}%`;
-          card.querySelector('[data-act="open"]').addEventListener('click', (ev) => { ev.stopPropagation(); openEbook(eb.id); });
-          card.querySelector('[data-act="del"]').addEventListener('click', async (ev) => {
+            `<div class="cover"><div class="cover-text"></div><div class="cover-prog"><div style="width:${prog.pct}%"></div></div></div>
+             <button class="card-menu" data-act="menu" title="Delete this audiobook">✕</button>
+             <div class="card-body">
+               <div class="card-title"></div>
+               <div class="card-sub"></div>
+             </div>`;
+          applyCoverEl(card.querySelector('.cover'), eb);
+          card.querySelector('.card-title').textContent = eb.title;
+          card.querySelector('.card-sub').textContent = eb.complete
+            ? '✓ Finished'
+            : `${prog.pct}% · ${tracks.length} recording${tracks.length === 1 ? '' : 's'}`;
+          card.addEventListener('click', () => openEbook(eb.id));
+          card.querySelector('[data-act="menu"]').addEventListener('click', async (ev) => {
             ev.stopPropagation();
             if (!confirm(`Delete the audiobook "${eb.title}" and all ${tracks.length} recording${tracks.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
             await deleteEbookById(eb.id);
             await renderEbookList();
+            updateMini();
           });
-          card.addEventListener('click', () => openEbook(eb.id));
           list.appendChild(card);
         }
         updateStorageMeter();
@@ -2154,26 +2375,137 @@
 
       /* ---- ebook detail / player ---- */
       async function openEbook(id) {
-        currentEbookId = id;
         const eb = getEbook(id);
         if (!eb) return;
+        const switching = id !== currentEbookId;
+        if (switching && !audio.paused) stopPlayback();
+        currentEbookId = id;
         currentTracks = tracksForEbook(id);
         el('libraryListView').hidden = true;
         el('ebookDetailView').hidden = false;
+        el('moreActions').hidden = true;
         el('ebookTitle').textContent = eb.title;
         el('ebookDetailMeta').textContent = `${currentTracks.length} recording${currentTracks.length === 1 ? '' : 's'}`;
+        applyCoverEl(el('playerCover'), eb);
+        setTrackListOpen(false);
         renderTrackList(eb);
-        const hasBookmark = eb.lastTrackId && currentTracks.some(t => t.id === eb.lastTrackId);
-        el('ebookResume').textContent = hasBookmark
-          ? `▶ Resume (${resumeLabel(eb)})`
-          : '▶ Play';
+        syncSpeedPill();
+        // Load (paused) the resume point so the scrubber/times show before play.
+        if (switching || currentTrackIdx < 0 || !audio.src) {
+          const bi = eb.lastTrackId ? currentTracks.findIndex(t => t.id === eb.lastTrackId) : -1;
+          const idx = bi >= 0 ? bi : 0;
+          if (currentTracks.length) loadTrack(idx, bi >= 0 ? (eb.lastPosition || 0) : 0, false);
+          else { currentTrackIdx = -1; updateTrackPill(-1); }
+        } else {
+          updateTrackPill(currentTrackIdx);
+        }
+        updatePlayerState();
+        updateMini();
       }
 
-      function resumeLabel(eb) {
-        const t = currentTracks.find(x => x.id === eb.lastTrackId);
-        if (!t) return '';
-        const where = t.fromPage != null ? `pp ${t.fromPage}` : (t.label || '').slice(0, 18);
-        return `${where} · ${fmtTime(eb.lastPosition || 0)}`;
+      // Load a track into the audio element; play immediately when autoplay.
+      async function loadTrack(idx, startAt, autoplay) {
+        if (idx < 0 || idx >= currentTracks.length) return;
+        currentTrackIdx = idx;
+        const t = currentTracks[idx];
+        audio.src = audioUrl(t.id);
+        audio.playbackRate = parseFloat(el('ebookSpeed').value);
+        const onMeta = () => {
+          try { if (startAt) audio.currentTime = startAt; } catch {}
+          audio.removeEventListener('loadedmetadata', onMeta);
+          updatePlayerState(); updateMini();
+        };
+        audio.addEventListener('loadedmetadata', onMeta);
+        if (autoplay) await audio.play().catch(() => {});
+        const eb = getEbook(currentEbookId);
+        if (eb) renderTrackList(eb);
+        updateTrackPill(idx);
+        updatePlayerState(); updateMini();
+        if (autoplay) saveBookmark(0);
+      }
+
+      function updatePlayerState() {
+        const playing = !audio.paused && !audio.ended;
+        el('playBig').textContent = playing ? '⏸' : '▶';
+        el('playBig').setAttribute('aria-label', playing ? 'Pause' : 'Play');
+        const cur = audio.currentTime || 0;
+        const dur = isFinite(audio.duration) ? audio.duration : 0;
+        el('timeElapsed').textContent = fmtClock(cur);
+        el('timeTotal').textContent = fmtClock(dur);
+        el('timeRemaining').textContent = dur ? `${Math.max(1, Math.ceil((dur - cur) / 60))} min left` : '';
+        const pct = dur ? (cur / dur * 100) : 0;
+        el('scrubFill').style.width = pct + '%';
+        el('scrubKnob').style.left = pct + '%';
+        el('prevTrack').disabled = currentTrackIdx <= 0;
+        el('nextTrack').disabled = currentTrackIdx < 0 || currentTrackIdx >= currentTracks.length - 1;
+      }
+
+      function updateTrackPill(idx) {
+        const t = currentTracks[idx];
+        el('trackPillLabel').textContent = t
+          ? `${idx + 1}/${currentTracks.length} · ${t.label || t.filename}`
+          : 'Tracks';
+      }
+
+      function setTrackListOpen(open) {
+        el('trackList').hidden = !open;
+        el('trackListTools').hidden = !open;
+        el('trackPillCaret').textContent = open ? '▴' : '▾';
+        if (open) setTimeout(() => centerCurrentTrack(false), 30);
+      }
+
+      function syncSpeedPill() {
+        const v = parseFloat(el('ebookSpeed').value);
+        el('speedPill').textContent = String(v) + '×';
+      }
+
+      /* ---- mini-player (follows you while browsing the library) ---- */
+      function updateMini() {
+        const eb = currentEbookId ? getEbook(currentEbookId) : null;
+        const hasPlayback = !!(eb && currentTrackIdx >= 0 && currentTracks[currentTrackIdx]);
+        const show = hasPlayback && el('ebookDetailView').hidden && !el('libraryView').hidden;
+        el('miniPlayer').hidden = !show;
+        document.body.classList.toggle('has-mini', show);
+        if (!show) return;
+        applyCoverEl(el('miniCover'), eb);
+        el('miniTitle').textContent = eb.title;
+        const t = currentTracks[currentTrackIdx];
+        el('miniSub').textContent = t ? (t.label || t.filename) : '';
+        el('miniPlay').textContent = (!audio.paused && !audio.ended) ? '⏸' : '▶';
+      }
+
+      /* ---- sleep timer ---- */
+      let sleepTimer = 0, sleepEndOfTrack = false;
+      function clearSleep() { clearTimeout(sleepTimer); sleepTimer = 0; sleepEndOfTrack = false; el('sleepBtn').classList.remove('active'); }
+      function setSleep(mins) {
+        clearSleep();
+        if (mins === 'track') { sleepEndOfTrack = true; el('sleepBtn').classList.add('active'); setStatus('Sleep: will pause at end of this track.'); return; }
+        if (mins > 0) {
+          sleepTimer = setTimeout(() => { audio.pause(); clearSleep(); setStatus('Sleep timer: paused.'); }, mins * 60000);
+          el('sleepBtn').classList.add('active');
+          setStatus(`Sleep: pausing in ${mins} min.`);
+        }
+      }
+      function showSleepSheet() {
+        const ov = document.createElement('div');
+        ov.className = 'sheet-overlay';
+        ov.innerHTML = `<div class="sheet"><h3>Sleep timer</h3>
+          <button class="opt" data-m="0">Off</button>
+          <button class="opt" data-m="track">End of current track</button>
+          <button class="opt" data-m="15">15 minutes</button>
+          <button class="opt" data-m="30">30 minutes</button>
+          <button class="opt" data-m="45">45 minutes</button>
+          <button class="opt" data-m="60">60 minutes</button></div>`;
+        ov.addEventListener('click', (e) => {
+          if (e.target === ov) { ov.remove(); return; }
+          const b = e.target.closest('.opt'); if (!b) return;
+          const m = b.dataset.m;
+          if (m === '0') { clearSleep(); setStatus('Sleep timer off.'); }
+          else if (m === 'track') setSleep('track');
+          else setSleep(parseInt(m, 10));
+          ov.remove();
+        });
+        document.body.appendChild(ov);
       }
 
       function renderTrackList(eb) {
@@ -2298,21 +2630,7 @@
         });
       })();
 
-      async function playTrack(idx, startAt) {
-        if (idx < 0 || idx >= currentTracks.length) return;
-        currentTrackIdx = idx;
-        const t = currentTracks[idx];
-        audio.src = audioUrl(t.id);
-        audio.playbackRate = parseFloat(el('ebookSpeed').value);
-        if (startAt) {
-          const seek = () => { try { audio.currentTime = startAt; } catch {} audio.removeEventListener('loadedmetadata', seek); };
-          audio.addEventListener('loadedmetadata', seek);
-        }
-        await audio.play().catch(() => {});
-        const eb = getEbook(currentEbookId);
-        if (eb) renderTrackList(eb);
-        saveBookmark(0);
-      }
+      function playTrack(idx, startAt) { return loadTrack(idx, startAt || 0, true); }
 
       function stopPlayback() {
         if (!audio.paused) audio.pause();
@@ -2334,8 +2652,10 @@
         saveLib().catch(() => {});
       }
 
-      audio.addEventListener('timeupdate', () => saveBookmark(false));
-      audio.addEventListener('pause', () => saveBookmark(true));
+      audio.addEventListener('timeupdate', () => { saveBookmark(false); updatePlayerState(); updateMini(); });
+      audio.addEventListener('play', () => { updatePlayerState(); updateMini(); });
+      audio.addEventListener('pause', () => { saveBookmark(true); updatePlayerState(); updateMini(); });
+      audio.addEventListener('loadedmetadata', () => updatePlayerState());
       audio.addEventListener('error', async () => {
         if (currentTrackIdx < 0 || !currentTracks[currentTrackIdx]) return;
         const t = currentTracks[currentTrackIdx];
@@ -2344,43 +2664,100 @@
         setStatus(`Couldn't play "${t.label || t.filename}"${info}. It may need re-uploading.`);
       });
       audio.addEventListener('ended', async () => {
+        if (sleepEndOfTrack) { clearSleep(); updatePlayerState(); updateMini(); setStatus('Sleep timer: paused at end of track.'); return; }
         if (currentTrackIdx < currentTracks.length - 1) {
           playTrack(currentTrackIdx + 1, 0);
         } else {
           const eb = getEbook(currentEbookId);
           if (eb) { eb.complete = true; eb.updatedAt = Date.now(); putEbook(eb); saveLib().catch(() => {}); }
+          updatePlayerState(); updateMini();
           setStatus('Finished the audiobook.');
         }
       });
 
-      el('ebookResume').addEventListener('click', async () => {
-        const eb = getEbook(currentEbookId);
-        let idx = 0, at = 0;
-        if (eb && eb.lastTrackId) {
-          const i = currentTracks.findIndex(t => t.id === eb.lastTrackId);
-          if (i >= 0) { idx = i; at = eb.lastPosition || 0; }
+      // Big play/pause — resume the bookmark when nothing is loaded yet.
+      el('playBig').addEventListener('click', () => {
+        if (!currentTracks.length) { setStatus('No recordings in this book yet.'); return; }
+        if (audio.paused || audio.ended) {
+          if (currentTrackIdx < 0 || !audio.src) {
+            const eb = getEbook(currentEbookId);
+            const bi = eb && eb.lastTrackId ? currentTracks.findIndex(t => t.id === eb.lastTrackId) : -1;
+            playTrack(bi >= 0 ? bi : 0, bi >= 0 ? (eb.lastPosition || 0) : 0);
+          } else {
+            audio.play().catch(() => {}); updatePlayerState(); updateMini();
+          }
+        } else {
+          audio.pause();
         }
-        playTrack(idx, at);
       });
-      el('ebookRestart').addEventListener('click', () => playTrack(0, 0));
+      el('prevTrack').addEventListener('click', () => { if (currentTrackIdx > 0) playTrack(currentTrackIdx - 1, 0); });
+      el('nextTrack').addEventListener('click', () => { if (currentTrackIdx >= 0 && currentTrackIdx < currentTracks.length - 1) playTrack(currentTrackIdx + 1, 0); });
+      el('skipBack').addEventListener('click', () => { audio.currentTime = Math.max(0, (audio.currentTime || 0) - 30); updatePlayerState(); saveBookmark(1); });
+      el('skipFwd').addEventListener('click', () => { const d = isFinite(audio.duration) ? audio.duration : 0; audio.currentTime = Math.min(d || 1e9, (audio.currentTime || 0) + 30); updatePlayerState(); saveBookmark(1); });
 
-      el('ebookSpeed').addEventListener('input', () => {
-        el('ebookSpeedValue').textContent = parseFloat(el('ebookSpeed').value).toFixed(1) + '×';
-        audio.playbackRate = parseFloat(el('ebookSpeed').value);
+      // Scrubber: click or drag to seek.
+      (function initScrubber() {
+        const sc = el('scrubber');
+        let dragging = false;
+        const seekTo = (clientX) => {
+          const r = sc.getBoundingClientRect();
+          const frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+          const dur = isFinite(audio.duration) ? audio.duration : 0;
+          el('scrubFill').style.width = (frac * 100) + '%';
+          el('scrubKnob').style.left = (frac * 100) + '%';
+          if (dur) { audio.currentTime = frac * dur; updatePlayerState(); }
+        };
+        sc.addEventListener('pointerdown', (e) => { dragging = true; sc.setPointerCapture(e.pointerId); seekTo(e.clientX); });
+        sc.addEventListener('pointermove', (e) => { if (dragging) seekTo(e.clientX); });
+        sc.addEventListener('pointerup', () => { if (dragging) { dragging = false; saveBookmark(1); } });
+        sc.addEventListener('pointercancel', () => { dragging = false; });
+      })();
+
+      const SPEEDS = [0.8, 1, 1.25, 1.5, 1.75, 2];
+      el('speedPill').addEventListener('click', () => {
+        let v = parseFloat(el('ebookSpeed').value);
+        let i = SPEEDS.indexOf(v); i = (i + 1) % SPEEDS.length; v = SPEEDS[i];
+        el('ebookSpeed').value = v; audio.playbackRate = v; syncSpeedPill();
       });
+
+      el('sleepBtn').addEventListener('click', showSleepSheet);
+      el('moreBtn').addEventListener('click', () => { el('moreActions').hidden = !el('moreActions').hidden; });
+      el('trackPill').addEventListener('click', () => setTrackListOpen(el('trackList').hidden));
+
+      el('ebookRestart').addEventListener('click', () => playTrack(0, 0));
+      el('ebookCover').addEventListener('click', () => el('coverFile').click());
+      el('coverFile').addEventListener('change', async (e) => {
+        const f = e.target.files[0]; e.target.value = '';
+        if (!f || !currentEbookId) return;
+        setStatus('Uploading cover…');
+        try {
+          await uploadCover(currentEbookId, f);
+          const eb = getEbook(currentEbookId);
+          eb.coverUpdatedAt = Date.now(); putEbook(eb);
+          await saveLib();
+          applyCoverEl(el('playerCover'), eb); updateMini();
+          setStatus('Cover updated.');
+        } catch (err) { setStatus('Cover upload failed: ' + (err.message || err)); }
+      });
+
+      // Mini-player controls.
+      el('miniPlay').addEventListener('click', (e) => { e.stopPropagation(); if (audio.paused || audio.ended) audio.play().catch(() => {}); else audio.pause(); });
+      el('miniOpen').addEventListener('click', () => { if (currentEbookId) openEbook(currentEbookId); });
+      el('miniCover').addEventListener('click', () => { if (currentEbookId) openEbook(currentEbookId); });
 
       el('ebookBack').addEventListener('click', async () => {
-        stopPlayback();
+        // Keep playing — the mini-player takes over while you browse.
         el('ebookDetailView').hidden = true;
         el('libraryListView').hidden = false;
-        currentTrackIdx = -1;
         await renderEbookList();
+        updateMini();
       });
 
       async function deleteEbookById(id) {
         if (id === currentEbookId) stopPlayback();
         setStatus('Deleting…');
         for (const t of tracksForEbook(id)) { delTrackMem(t.id); await deleteAudio(t.id); }
+        await deleteCover(id);
         delEbookMem(id);
         try { await saveLib(); } catch {}
         if (id === currentEbookId) { currentEbookId = null; currentTrackIdx = -1; }
@@ -2395,6 +2772,7 @@
         el('ebookDetailView').hidden = true;
         el('libraryListView').hidden = false;
         await renderEbookList();
+        updateMini();
       });
 
       el('clearAllLibrary').addEventListener('click', async () => {
@@ -2410,10 +2788,11 @@
         for (const t of LIB.tracks.slice()) await deleteAudio(t.id);
         LIB.ebooks = []; LIB.tracks = [];
         try { await saveLib(); } catch {}
-        currentEbookId = null;
+        currentEbookId = null; currentTrackIdx = -1;
         el('ebookDetailView').hidden = true;
         el('libraryListView').hidden = false;
         await renderEbookList();
+        updateMini();
         setStatus('Library cleared.');
       });
 
