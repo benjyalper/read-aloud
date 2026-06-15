@@ -1292,9 +1292,8 @@
       if (typeof window.startLibraryJob !== 'function') { setStatus('Library isn’t ready — open the Library tab once, then retry.'); return; }
       const ratePct = Math.round((parseFloat(speedEl.value) - 1) * 100);
       const parts = selected.map(n => buildPartMeta(docParts[n - 1], n));
-      const title = (prompt(`Name this audiobook (${parts.length} part${parts.length === 1 ? '' : 's'} will generate on the server):`, '') || '').trim();
-      if (!title) { setStatus('Cancelled — an audiobook name is required.'); return; }
-      await window.startLibraryJob({ title, voice, ratePct, parts });
+      // The target (new book or append to an existing one) is chosen inside the library module.
+      await window.startLibraryJob({ voice, ratePct, parts });
     });
 
     $('clearParts').addEventListener('click', () => {
@@ -2289,20 +2288,58 @@
           wrap.appendChild(card);
         }
       }
+      // Bottom-sheet picker: new audiobook, or append to an existing one.
+      function chooseTargetBook() {
+        return new Promise(resolve => {
+          const ov = document.createElement('div');
+          ov.className = 'sheet-overlay';
+          const sheet = document.createElement('div');
+          sheet.className = 'sheet';
+          const h = document.createElement('h3');
+          h.textContent = 'Generate into…';
+          sheet.appendChild(h);
+          const newBtn = document.createElement('button');
+          newBtn.className = 'opt';
+          newBtn.innerHTML = '<b>＋ New audiobook</b>';
+          newBtn.addEventListener('click', () => {
+            ov.remove();
+            const t = (prompt('Name the new audiobook:', '') || '').trim();
+            resolve(t ? { ebookId: null, title: t } : null);
+          });
+          sheet.appendChild(newBtn);
+          LIB.ebooks.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).forEach(b => {
+            const btn = document.createElement('button');
+            btn.className = 'opt';
+            const n = tracksForEbook(b.id).length;
+            btn.textContent = `${b.title}  (add to ${n} recording${n === 1 ? '' : 's'})`;
+            btn.addEventListener('click', () => { ov.remove(); resolve({ ebookId: b.id, title: b.title }); });
+            sheet.appendChild(btn);
+          });
+          ov.appendChild(sheet);
+          ov.addEventListener('click', e => { if (e.target === ov) { ov.remove(); resolve(null); } });
+          document.body.appendChild(ov);
+        });
+      }
+
       // Called from the Reader's "Generate to Library" button (outer scope).
-      window.startLibraryJob = async function ({ title, voice, ratePct, parts }) {
+      window.startLibraryJob = async function ({ voice, ratePct, parts }) {
         const ok = await ensureAuth();
         if (!ok) { setStatus('Library passphrase needed to generate to the cloud.'); return; }
+        if (!loaded) { try { await loadLib(); } catch {} }
+        const target = await chooseTargetBook();
+        if (!target) { setStatus('Cancelled — no audiobook chosen.'); return; }
         setStatus('Sending parts to the server…');
         try {
+          const body = { voice, rate: ratePct, parts };
+          if (target.ebookId) body.ebookId = target.ebookId; else body.title = target.title;
           const r = await fetch('/api/lib/jobs', {
             method: 'POST',
             headers: apiHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ title, voice, rate: ratePct, parts }),
+            body: JSON.stringify(body),
           });
           if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.status); }
           const { total } = await r.json();
-          setStatus(`☁ Generating ${total} part${total === 1 ? '' : 's'} on the server. You can close the app — progress shows in the Library tab.`);
+          setStatus(`☁ Generating ${total} part${total === 1 ? '' : 's'} on the server${target.ebookId ? ` into “${target.title}”` : ''}. You can close the app — progress shows in the Library tab.`);
           await showLibrary();
           startJobPolling(true);
         } catch (err) { setStatus('Could not start generation: ' + (err.message || err)); }
