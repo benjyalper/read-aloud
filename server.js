@@ -52,6 +52,16 @@ function chunkBySentence(text, maxLen) {
   return out;
 }
 
+// msedge-tts drops the text into SSML without escaping, so a raw & or <
+// produces invalid XML and Edge returns ZERO audio (a silent 0-byte file).
+// Escape the XML-significant characters before synthesis.
+function escapeForSsml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 app.use(express.json({ limit: '5mb' }));
 app.use(express.static('.', { dotfiles: 'deny', extensions: ['html'] }));
 
@@ -111,7 +121,7 @@ app.post('/api/tts', async (req, res) => {
     await activeTts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
     for (let i = 0; i < chunks.length; i++) {
       if (closed) break;
-      const { audioStream } = activeTts.toStream(chunks[i], { rate: rateStr });
+      const { audioStream } = activeTts.toStream(escapeForSsml(chunks[i]), { rate: rateStr });
       for await (const data of audioStream) {
         if (closed) break;
         res.write(data);
