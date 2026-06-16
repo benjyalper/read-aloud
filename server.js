@@ -432,6 +432,61 @@ async function loadJobsOnStartup() {
   } catch (err) { console.error('[job] startup load failed', err); }
 }
 
+function jobsActive() { return Object.values(jobs).some(j => j.status === 'running' || j.status === 'queued'); }
+
+// Find audio/cover files on the volume that no library entry references.
+async function scanOrphans() {
+  await ensureLibDirs();
+  let index;
+  try { index = JSON.parse(await fsp.readFile(INDEX_FILE, 'utf8')); }
+  catch { index = { ebooks: [], tracks: [] }; }
+  const trackIds = new Set((index.tracks || []).map(t => t.id));
+  const ebookIds = new Set((index.ebooks || []).map(e => e.id));
+  const orphans = [];
+  let bytes = 0;
+  const sweep = async (dir, ext, refSet) => {
+    let files = [];
+    try { files = await fsp.readdir(dir); } catch { return; }
+    for (const f of files) {
+      if (!f.endsWith(ext)) continue;
+      const id = f.slice(0, -ext.length);
+      if (refSet.has(id)) continue;
+      let sz = 0;
+      try { sz = (await fsp.stat(path.join(dir, f))).size; } catch {}
+      orphans.push({ dir, file: f, bytes: sz });
+      bytes += sz;
+    }
+  };
+  await sweep(AUDIO_DIR, '.mp3', trackIds);
+  await sweep(COVER_DIR, '.img', ebookIds);
+  return { orphans, bytes };
+}
+
+// Preview orphaned files (dry run).
+app.get('/api/lib/cleanup', checkPass, async (_req, res) => {
+  try {
+    const { orphans, bytes } = await scanOrphans();
+    res.json({
+      count: orphans.length, bytes,
+      audio: orphans.filter(o => o.dir === AUDIO_DIR).length,
+      covers: orphans.filter(o => o.dir === COVER_DIR).length,
+    });
+  } catch (err) { res.status(500).json({ error: String(err.message || err) }); }
+});
+
+// Delete orphaned files.
+app.post('/api/lib/cleanup', checkPass, async (_req, res) => {
+  try {
+    if (jobsActive()) return res.status(409).json({ error: 'Generation in progress — try again once jobs finish.' });
+    const { orphans, bytes } = await scanOrphans();
+    let deleted = 0;
+    for (const o of orphans) {
+      try { await fsp.rm(path.join(o.dir, o.file), { force: true }); deleted++; } catch {}
+    }
+    res.json({ deleted, bytes });
+  } catch (err) { res.status(500).json({ error: String(err.message || err) }); }
+});
+
 // Create a background generation job.
 app.post('/api/lib/jobs', checkPass, async (req, res) => {
   try {

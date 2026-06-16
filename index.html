@@ -603,6 +603,7 @@
         <div class="small" id="emptyLibrary" style="opacity:0.7;">No audiobooks yet. Tap “New audiobook” and upload one or more MP3s — you’ll be asked to name the book.</div>
         <div class="small" id="storageMeter" style="margin-top:12px; opacity:0.6;"></div>
         <div class="row" style="margin-top:8px;">
+          <button class="icon-btn" id="cleanupStorage" type="button" title="Delete audio/cover files not linked to any book">🧹 Clean up storage</button>
           <button class="icon-btn danger" id="clearAllLibrary" type="button">Clear all library data</button>
         </div>
       </section>
@@ -2949,6 +2950,32 @@
         el('libraryListView').hidden = false;
         await renderEbookList();
         updateMini();
+      });
+
+      el('cleanupStorage').addEventListener('click', async () => {
+        setStatus('Scanning for orphaned files…');
+        let info;
+        try {
+          const r = await fetch('/api/lib/cleanup', { headers: apiHeaders() });
+          if (!r.ok) throw new Error(r.status);
+          info = await r.json();
+        } catch (e) { setStatus('Cleanup scan failed: ' + (e.message || e)); return; }
+        if (!info.count) { setStatus('✓ No orphaned files — storage is already clean.'); return; }
+        const mb = (info.bytes / 1024 / 1024).toFixed(1);
+        const parts = [];
+        if (info.audio) parts.push(`${info.audio} audio`);
+        if (info.covers) parts.push(`${info.covers} cover${info.covers === 1 ? '' : 's'}`);
+        if (!confirm(`Found ${info.count} orphaned file${info.count === 1 ? '' : 's'} (${mb} MB) not linked to any book — ${parts.join(', ')}.\n\nDelete them to reclaim the space? Your audiobooks are untouched.`)) {
+          setStatus('Cleanup cancelled.');
+          return;
+        }
+        setStatus('Deleting orphaned files…');
+        try {
+          const r = await fetch('/api/lib/cleanup', { method: 'POST', headers: apiHeaders() });
+          const res = await r.json();
+          if (!r.ok) throw new Error(res.error || r.status);
+          setStatus(`✓ Reclaimed ${(res.bytes / 1024 / 1024).toFixed(1)} MB (${res.deleted} file${res.deleted === 1 ? '' : 's'} deleted).`);
+        } catch (e) { setStatus('Cleanup failed: ' + (e.message || e)); }
       });
 
       el('clearAllLibrary').addEventListener('click', async () => {
