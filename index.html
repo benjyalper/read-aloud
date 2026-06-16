@@ -2953,29 +2953,38 @@
       });
 
       el('cleanupStorage').addEventListener('click', async () => {
+        const btn = el('cleanupStorage');
+        const origLabel = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '⏳ Scanning…';
         setStatus('Scanning for orphaned files…');
         let info;
         try {
           const r = await fetch('/api/lib/cleanup', { headers: apiHeaders() });
           if (!r.ok) throw new Error(r.status);
           info = await r.json();
-        } catch (e) { setStatus('Cleanup scan failed: ' + (e.message || e)); return; }
-        if (!info.count) { setStatus('✓ No orphaned files — storage is already clean.'); return; }
+        } catch (e) { btn.disabled = false; btn.textContent = origLabel; setStatus('Cleanup scan failed: ' + (e.message || e)); alert('Couldn’t scan storage: ' + (e.message || e)); return; }
+        if (!info.count) { btn.disabled = false; btn.textContent = origLabel; setStatus('✓ Storage is already clean.'); alert('No orphaned files — your storage is already clean.'); return; }
         const mb = (info.bytes / 1024 / 1024).toFixed(1);
         const parts = [];
         if (info.audio) parts.push(`${info.audio} audio`);
         if (info.covers) parts.push(`${info.covers} cover${info.covers === 1 ? '' : 's'}`);
         if (!confirm(`Found ${info.count} orphaned file${info.count === 1 ? '' : 's'} (${mb} MB) not linked to any book — ${parts.join(', ')}.\n\nDelete them to reclaim the space? Your audiobooks are untouched.`)) {
+          btn.disabled = false; btn.textContent = origLabel;
           setStatus('Cleanup cancelled.');
           return;
         }
+        btn.textContent = '⏳ Deleting…';
         setStatus('Deleting orphaned files…');
         try {
           const r = await fetch('/api/lib/cleanup', { method: 'POST', headers: apiHeaders() });
           const res = await r.json();
           if (!r.ok) throw new Error(res.error || r.status);
-          setStatus(`✓ Reclaimed ${(res.bytes / 1024 / 1024).toFixed(1)} MB (${res.deleted} file${res.deleted === 1 ? '' : 's'} deleted).`);
-        } catch (e) { setStatus('Cleanup failed: ' + (e.message || e)); }
+          const done = `✓ Done — reclaimed ${(res.bytes / 1024 / 1024).toFixed(1)} MB (${res.deleted} file${res.deleted === 1 ? '' : 's'} deleted).`;
+          setStatus(done);
+          alert(done);
+        } catch (e) { setStatus('Cleanup failed: ' + (e.message || e)); alert('Cleanup failed: ' + (e.message || e)); }
+        btn.disabled = false; btn.textContent = origLabel;
       });
 
       el('clearAllLibrary').addEventListener('click', async () => {
