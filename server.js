@@ -142,6 +142,7 @@ app.post('/api/tts', async (req, res) => {
 const DATA_DIR = process.env.DATA_DIR || '/data';
 const AUDIO_DIR = path.join(DATA_DIR, 'audio');
 const COVER_DIR = path.join(DATA_DIR, 'covers');
+const CAPTIONS_DIR = path.join(DATA_DIR, 'captions');
 const JOBS_DIR = path.join(DATA_DIR, 'jobs');
 const INDEX_FILE = path.join(DATA_DIR, 'index.json');
 const APP_PASSPHRASE = process.env.APP_PASSPHRASE || '';
@@ -153,6 +154,7 @@ async function ensureLibDirs() {
   if (libReady) return;
   await fsp.mkdir(AUDIO_DIR, { recursive: true });
   await fsp.mkdir(COVER_DIR, { recursive: true });
+  await fsp.mkdir(CAPTIONS_DIR, { recursive: true });
   await fsp.mkdir(JOBS_DIR, { recursive: true });
   try { await fsp.access(INDEX_FILE); }
   catch { await fsp.writeFile(INDEX_FILE, JSON.stringify({ ebooks: [], tracks: [] }), 'utf8'); }
@@ -235,8 +237,8 @@ app.delete('/api/lib/audio/:id', checkPass, async (req, res) => {
   try {
     const id = req.params.id;
     if (!SAFE_ID.test(id)) return res.status(400).json({ error: 'Bad id.' });
-    const file = path.join(AUDIO_DIR, id + '.mp3');
-    await fsp.rm(file, { force: true });
+    await fsp.rm(path.join(AUDIO_DIR, id + '.mp3'), { force: true });
+    await fsp.rm(path.join(CAPTIONS_DIR, id + '.json'), { force: true });
     res.json({ ok: true });
   } catch (err) {
     console.error('[lib] delete', err);
@@ -280,6 +282,21 @@ app.get('/api/lib/audio/:id', checkPass, async (req, res) => {
     }
   } catch (err) {
     console.error('[lib] stream', err);
+    if (!res.headersSent) res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+// Caption/timing sidecar for a recording (word-level timings, if generated with captions).
+app.get('/api/lib/captions/:id', checkPass, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!SAFE_ID.test(id)) return res.status(400).json({ error: 'Bad id.' });
+    let raw;
+    try { raw = await fsp.readFile(path.join(CAPTIONS_DIR, id + '.json'), 'utf8'); }
+    catch { return res.status(404).json({ error: 'Not found.' }); }
+    res.setHeader('Cache-Control', 'no-store');
+    res.type('application/json').send(raw);
+  } catch (err) {
     if (!res.headersSent) res.status(500).json({ error: String(err.message || err) });
   }
 });
@@ -337,20 +354,46 @@ app.get('/api/lib/cover/:id', checkPass, async (req, res) => {
 // the library, so the user's device is free to disconnect in between.
 const randomId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
-// Synthesize an entire part to a single MP3 Buffer (chunked + XML-escaped).
+// Synthesize an entire part to a single MP3 Buffer, capturing word-level
+// timings for captions. Returns { buffer, captions: [[absMs, word], ...] }.
+// Note: Edge sends WordBoundary metadata but the library only ends the AUDIO
+// stream on turn-end (not the metadata one), so we collect via a 'data'
+// listener and never await the metadata stream's end.
+const TICKS_PER_MS = 10000;
+const MP3_BYTES_PER_SEC = 6000; // 48 kbps CBR -> 6000 bytes/sec, for chunk offset math
 async function generateMp3Buffer(text, voice, ratePct) {
   const rateStr = `${ratePct >= 0 ? '+' : ''}${ratePct}%`;
   const chunks = chunkBySentence(String(text || '').trim(), CHUNK_SIZE);
   const tts = new MsEdgeTTS();
-  await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+  await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3, { wordBoundaryEnabled: true });
   const bufs = [];
+  const words = []; // [absMs, word]
+  let baseMs = 0;    // cumulative audio time of chunks already written
   try {
     for (const ch of chunks) {
-      const { audioStream } = tts.toStream(escapeForSsml(ch), { rate: rateStr });
-      for await (const data of audioStream) bufs.push(data);
+      const { audioStream, metadataStream } = tts.toStream(escapeForSsml(ch), { rate: rateStr });
+      const chunkWords = [];
+      if (metadataStream) {
+        metadataStream.on('data', (c) => {
+          try {
+            const obj = JSON.parse(c.toString());
+            for (const m of (obj.Metadata || [])) {
+              if (m.Type === 'WordBoundary' && m.Data) {
+                const w = (m.Data.text && m.Data.text.Text) || '';
+                if (w) chunkWords.push([m.Data.Offset / TICKS_PER_MS, w]);
+              }
+            }
+          } catch {}
+        });
+      }
+      let chunkBytes = 0;
+      for await (const data of audioStream) { bufs.push(data); chunkBytes += data.length; }
+      await new Promise(r => setImmediate(r)); // flush buffered metadata 'data' events
+      for (const [offMs, w] of chunkWords) words.push([Math.round(baseMs + offMs), w]);
+      baseMs += (chunkBytes / MP3_BYTES_PER_SEC) * 1000;
     }
   } finally { try { tts.close(); } catch {} }
-  return Buffer.concat(bufs);
+  return { buffer: Buffer.concat(bufs), captions: words };
 }
 
 // Serialized read-modify-write of index.json (shares writeChain with saves).
@@ -390,15 +433,19 @@ async function runJob(job) {
     job.currentLabel = p.label || p.filename || `part ${job.cursor + 1}`;
     await persistJob(job);
     try {
-      const buf = await generateMp3Buffer(p.text, job.voice, job.rate);
+      const { buffer: buf, captions } = await generateMp3Buffer(p.text, job.voice, job.rate);
       if (!buf.length) { job.failed.push(job.currentLabel + ' (empty)'); continue; }
       const tid = randomId();
       await fsp.writeFile(path.join(AUDIO_DIR, tid + '.mp3'), buf);
+      let hasCaptions = false;
+      if (captions && captions.length) {
+        try { await fsp.writeFile(path.join(CAPTIONS_DIR, tid + '.json'), JSON.stringify({ v: 1, words: captions })); hasCaptions = true; } catch {}
+      }
       await mutateIndex(d => {
         d.tracks.push({
           id: tid, ebookId: job.ebookId, filename: p.filename || (job.currentLabel + '.mp3'),
           fromPage: p.fromPage ?? null, toPage: p.toPage ?? null, chapter: p.chapter || null,
-          label: p.label || p.filename || job.currentLabel, sizeBytes: buf.length, addedAt: Date.now(),
+          label: p.label || p.filename || job.currentLabel, sizeBytes: buf.length, hasCaptions, addedAt: Date.now(),
         });
         const eb = d.ebooks.find(e => e.id === job.ebookId);
         if (eb) eb.updatedAt = Date.now();
@@ -459,6 +506,7 @@ async function scanOrphans() {
   };
   await sweep(AUDIO_DIR, '.mp3', trackIds);
   await sweep(COVER_DIR, '.img', ebookIds);
+  await sweep(CAPTIONS_DIR, '.json', trackIds);
   return { orphans, bytes };
 }
 
@@ -470,6 +518,7 @@ app.get('/api/lib/cleanup', checkPass, async (_req, res) => {
       count: orphans.length, bytes,
       audio: orphans.filter(o => o.dir === AUDIO_DIR).length,
       covers: orphans.filter(o => o.dir === COVER_DIR).length,
+      captions: orphans.filter(o => o.dir === CAPTIONS_DIR).length,
     });
   } catch (err) { res.status(500).json({ error: String(err.message || err) }); }
 });
