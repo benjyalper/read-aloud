@@ -389,7 +389,19 @@ async function generateMp3Buffer(text, voice, ratePct) {
       let chunkBytes = 0;
       for await (const data of audioStream) { bufs.push(data); chunkBytes += data.length; }
       await new Promise(r => setImmediate(r)); // flush buffered metadata 'data' events
-      for (const [offMs, w] of chunkWords) words.push([Math.round(baseMs + offMs), w]);
+      // Edge strips punctuation from word boundaries, so re-attach it by
+      // aligning each spoken word back to the source text (cursor walk).
+      let cursor = 0;
+      for (const wp of chunkWords) {
+        const idx = ch.indexOf(wp[1], cursor);
+        if (idx >= 0) {
+          const end = idx + wp[1].length;
+          const m = ch.slice(end).match(/^[.,!?;:…"'”’»)\]}]+/);
+          if (m) wp[1] += m[0];
+          cursor = end + (m ? m[0].length : 0);
+        }
+        words.push([Math.round(baseMs + wp[0]), wp[1]]);
+      }
       baseMs += (chunkBytes / MP3_BYTES_PER_SEC) * 1000;
     }
   } finally { try { tts.close(); } catch {} }
