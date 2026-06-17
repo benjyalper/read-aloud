@@ -499,7 +499,7 @@
       <div class="small" id="textStats" style="margin-top: 4px; opacity: 0.7; min-height: 16px;"></div>
       <div class="row" style="margin-top: 10px;">
         <label class="btn secondary">
-          <input type="file" id="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp" multiple hidden>
+          <input type="file" id="file" accept=".pdf,.epub,.docx,.txt,.png,.jpg,.jpeg,.webp" multiple hidden>
           Load files
         </label>
         <button class="btn secondary" id="cleanup" type="button" title="Remove copyright/header/footer boilerplate">Clean up ✨</button>
@@ -517,7 +517,7 @@
             <option value="eng+heb">English + Hebrew</option>
           </select>
         </label>
-        <span class="small" style="opacity:0.7;">PDF, DOCX, TXT, or image. Multiple files supported.</span>
+        <span class="small" style="opacity:0.7;">PDF, EPUB, DOCX, TXT, or image. Multiple files supported.</span>
       </div>
       <div id="pbarWrap" hidden style="margin-top: 10px;">
         <div class="pbar"><div class="pbar-fill" id="pbarFill"></div></div>
@@ -1430,6 +1430,7 @@
       if (name.endsWith('.txt')) return { text: await f.text() };
       if (name.endsWith('.docx')) return { text: await readDocx(f) };
       if (name.endsWith('.pdf')) return await readPdf(f);
+      if (name.endsWith('.epub')) return await readEpub(f);
       if (f.type.startsWith('image/')) return { text: await readImage(f) };
       throw new Error(`Unsupported file: ${f.name}`);
     }
@@ -1484,6 +1485,189 @@
         if (chapterMap.length) chapterSource = 'detected';
       }
       return { text, pageCount: total, pageMap, chapterMap, chapterSource, isPreCleaned: true };
+    }
+
+    // ---- EPUB ----------------------------------------------------------------
+    // An EPUB is a ZIP of XHTML documents plus an OPF manifest/spine and a TOC.
+    // Each spine document is treated as one pseudo-"page" so the existing
+    // page-aligned splitting + chapter machinery applies unchanged.
+    function epubDir(p) {
+      const i = p.lastIndexOf('/');
+      return i >= 0 ? p.slice(0, i) : '';
+    }
+
+    function epubResolvePath(baseDir, rel) {
+      rel = decodeURIComponent((rel || '').split('#')[0].trim());
+      if (!rel) return baseDir;
+      const stack = baseDir ? baseDir.split('/').filter(Boolean) : [];
+      for (const seg of rel.split('/')) {
+        if (seg === '' || seg === '.') continue;
+        if (seg === '..') stack.pop();
+        else stack.push(seg);
+      }
+      return stack.join('/');
+    }
+
+    function epubZipEntry(zip, p) {
+      if (zip.file(p)) return zip.file(p);
+      const lower = p.toLowerCase();
+      const key = Object.keys(zip.files).find(k => k.toLowerCase() === lower)
+        || Object.keys(zip.files).find(k => k.toLowerCase().endsWith('/' + lower));
+      return key ? zip.file(key) : null;
+    }
+
+    async function epubReadText(zip, p) {
+      const e = epubZipEntry(zip, p);
+      return e ? await e.async('string') : null;
+    }
+
+    function epubHtmlToText(htmlStr) {
+      const doc = new DOMParser().parseFromString(htmlStr, 'text/html');
+      doc.querySelectorAll('script,style,svg,head').forEach(n => n.remove());
+      doc.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+      // Append paragraph breaks after block elements so reflowText keeps them.
+      doc.querySelectorAll('p,div,section,article,h1,h2,h3,h4,h5,h6,li,blockquote,tr,pre,figcaption,td')
+        .forEach(el => el.append('\n\n'));
+      const body = doc.body || doc.documentElement;
+      return body ? body.textContent : '';
+    }
+
+    function epubDedupeChapters(list) {
+      list.sort((a, b) => a.page - b.page);
+      const seen = new Set();
+      const out = [];
+      for (const c of list) {
+        if (seen.has(c.page)) continue;
+        seen.add(c.page);
+        out.push(c);
+      }
+      return out;
+    }
+
+    function epubChaptersFromNav(navHtml, navDir, hrefToPage) {
+      const doc = new DOMParser().parseFromString(navHtml, 'text/html');
+      const navs = Array.from(doc.querySelectorAll('nav'));
+      const tocNav = navs.find(n =>
+        ((n.getAttribute('epub:type') || n.getAttribute('type') || '').includes('toc')) ||
+        ((n.getAttribute('role') || '').includes('toc'))) || navs[0];
+      if (!tocNav) return [];
+      const out = [];
+      for (const a of tocNav.querySelectorAll('a[href]')) {
+        const title = a.textContent.trim();
+        const label = chapterLabelFromTitle(title);
+        if (!label) continue;
+        const p = hrefToPage[epubResolvePath(navDir, a.getAttribute('href'))];
+        if (p) out.push({ page: p, label });
+      }
+      return epubDedupeChapters(out);
+    }
+
+    function epubChaptersFromNcx(ncxXml, ncxDir, hrefToPage) {
+      const doc = new DOMParser().parseFromString(ncxXml, 'application/xml');
+      const points = doc.getElementsByTagNameNS('*', 'navPoint');
+      const out = [];
+      for (const np of Array.from(points)) {
+        const labelEl = np.getElementsByTagNameNS('*', 'text')[0];
+        const contentEl = np.getElementsByTagNameNS('*', 'content')[0];
+        const src = contentEl && contentEl.getAttribute('src');
+        const title = labelEl ? labelEl.textContent.trim() : '';
+        if (!src || !title) continue;
+        const label = chapterLabelFromTitle(title);
+        if (!label) continue;
+        const p = hrefToPage[epubResolvePath(ncxDir, src)];
+        if (p) out.push({ page: p, label });
+      }
+      return epubDedupeChapters(out);
+    }
+
+    async function readEpub(f) {
+      const zip = await JSZip.loadAsync(await f.arrayBuffer());
+
+      // 1. container.xml -> OPF location
+      const containerXml = await epubReadText(zip, 'META-INF/container.xml');
+      if (!containerXml) throw new Error('Not a valid EPUB (missing container.xml)');
+      const cdoc = new DOMParser().parseFromString(containerXml, 'application/xml');
+      const rootfile = cdoc.getElementsByTagName('rootfile')[0];
+      const opfPath = rootfile && rootfile.getAttribute('full-path');
+      if (!opfPath) throw new Error('Not a valid EPUB (no OPF rootfile)');
+      const opfDir = epubDir(opfPath);
+
+      // 2. OPF: manifest (id -> href/type/props) + ordered spine
+      const opfXml = await epubReadText(zip, opfPath);
+      const odoc = new DOMParser().parseFromString(opfXml, 'application/xml');
+      const manifest = {};
+      for (const it of Array.from(odoc.getElementsByTagNameNS('*', 'item'))) {
+        const id = it.getAttribute('id');
+        if (!id) continue;
+        manifest[id] = {
+          href: it.getAttribute('href') || '',
+          type: (it.getAttribute('media-type') || '').toLowerCase(),
+          props: it.getAttribute('properties') || '',
+        };
+      }
+      const spine = odoc.getElementsByTagNameNS('*', 'spine')[0];
+      const itemrefs = spine ? Array.from(spine.getElementsByTagNameNS('*', 'itemref')) : [];
+
+      // 3. Walk spine -> per-document text -> pageMap (one doc = one pseudo-page)
+      const pageMap = [];
+      const hrefToPage = {};
+      let text = '';
+      let page = 0;
+      const total = itemrefs.length;
+      for (let s = 0; s < total; s++) {
+        const idref = itemrefs[s].getAttribute('idref');
+        const item = idref && manifest[idref];
+        if (!item || !item.href) continue;
+        if (item.type && !/xhtml|html|xml/.test(item.type)) continue;
+        const docPath = epubResolvePath(opfDir, item.href);
+        showProgress(`Reading EPUB section ${s + 1}/${total}`, (s / total) * 100);
+        const raw = await epubReadText(zip, docPath);
+        if (raw == null) continue;
+        const cleaned = reflowText(cleanupText(epubHtmlToText(raw))).trim();
+        page++;
+        hrefToPage[docPath] = page; // map even when empty so TOC can still resolve
+        if (!cleaned) continue;
+        if (text) text += '\n\n';
+        const start = text.length;
+        text += cleaned;
+        pageMap.push({ page, start, end: text.length });
+      }
+      if (!text.trim()) throw new Error('EPUB had no extractable text');
+
+      // 4. Chapters from EPUB3 nav doc, else EPUB2 NCX
+      let chapterMap = [];
+      let chapterSource = null;
+      let navId = null;
+      for (const id in manifest) {
+        if (/(^|\s)nav(\s|$)/.test(manifest[id].props)) { navId = id; break; }
+      }
+      if (navId) {
+        const navPath = epubResolvePath(opfDir, manifest[navId].href);
+        const navHtml = await epubReadText(zip, navPath);
+        if (navHtml) {
+          chapterMap = epubChaptersFromNav(navHtml, epubDir(navPath), hrefToPage);
+          if (chapterMap.length) chapterSource = 'toc';
+        }
+      }
+      if (!chapterMap.length) {
+        let ncxId = spine && spine.getAttribute('toc');
+        if (!ncxId || !manifest[ncxId]) {
+          ncxId = null;
+          for (const id in manifest) {
+            if (manifest[id].type === 'application/x-dtbncx+xml') { ncxId = id; break; }
+          }
+        }
+        if (ncxId && manifest[ncxId]) {
+          const ncxPath = epubResolvePath(opfDir, manifest[ncxId].href);
+          const ncxXml = await epubReadText(zip, ncxPath);
+          if (ncxXml) {
+            chapterMap = epubChaptersFromNcx(ncxXml, epubDir(ncxPath), hrefToPage);
+            if (chapterMap.length) chapterSource = 'toc';
+          }
+        }
+      }
+
+      return { text, pageCount: page, pageMap, chapterMap, chapterSource, isPreCleaned: true };
     }
 
     const CHAPTER_NUM_WORDS = { one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20,'twenty-one':21,'twenty-two':22,'twenty-three':23,'twenty-four':24,'twenty-five':25 };
